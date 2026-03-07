@@ -1,13 +1,6 @@
 use super::context::get_client;
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, StatefulSet};
 use kube::api::{Api, Patch, PatchParams};
-use serde::Serialize;
-
-#[derive(Debug, Serialize)]
-pub struct ScaleInfo {
-    pub current_replicas: i32,
-    pub desired_replicas: i32,
-}
 
 #[tauri::command]
 pub async fn scale_resource(
