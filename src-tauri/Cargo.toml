@@ -1,0 +1,27 @@
+[package]
+name = "r3x-app"
+version = "0.1.0"
+description = "r3x - Lightweight Kubernetes cockpit by Rebash"
+authors = ["Rebash <admin@rebash.in>"]
+edition = "2021"
+
+[lib]
+name = "r3x_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+kube = { version = "0.98", features = ["client", "config", "runtime", "derive", "ws"] }
+k8s-openapi = { version = "0.24", features = ["latest"] }
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+http = "1"
