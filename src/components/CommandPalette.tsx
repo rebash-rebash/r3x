@@ -1,4 +1,4 @@
-import { createSignal, Show, For, createMemo } from "solid-js";
+import { createSignal, Show, For, createMemo, createEffect } from "solid-js";
 import {
   RESOURCE_KINDS,
   setActiveResourceKind,
@@ -13,6 +13,9 @@ import {
   runSecurityScan,
   loadHelmReleases,
   loadRbac,
+  apiResources,
+  setActiveApiResource,
+  ApiResourceInfo,
 } from "../stores/k8s";
 
 const [showCommand, setShowCommand] = createSignal(false);
@@ -24,25 +27,57 @@ interface CommandItem {
   action: () => void;
 }
 
+// Built-in resource kind keys for dedup
+const BUILTIN_KINDS = new Set(RESOURCE_KINDS.map((k) => k.key));
+
 export default function CommandPalette() {
   const [input, setInput] = createSignal("");
   let inputRef: HTMLInputElement | undefined;
+
+  // Programmatically focus input when palette opens (autofocus only works on initial render)
+  createEffect(() => {
+    if (showCommand()) {
+      setTimeout(() => inputRef?.focus(), 0);
+    }
+  });
+
+  function selectApiResource(ar: ApiResourceInfo) {
+    setActiveApiResource(ar);
+    setActiveResourceKind(`api:${ar.name}.${ar.group || "core"}`);
+    setSelectedResource(null);
+    loadResources();
+    close();
+  }
 
   // Build all available commands
   const allCommands = createMemo((): CommandItem[] => {
     const cmds: CommandItem[] = [];
 
-    // Resource kind commands
+    // Built-in resource kind commands (fast path, typed)
     for (const kind of RESOURCE_KINDS) {
       cmds.push({
         label: `:${kind.key}`,
         shortcut: kind.label,
         action: () => {
+          setActiveApiResource(null);
           setActiveResourceKind(kind.key);
           setSelectedResource(null);
           loadResources();
           close();
         },
+      });
+    }
+
+    // Discovered API resources (all types from cluster)
+    for (const ar of apiResources()) {
+      // Skip if already covered by built-in kinds
+      if (BUILTIN_KINDS.has(ar.name)) continue;
+
+      const groupLabel = ar.group ? ` (${ar.group})` : "";
+      cmds.push({
+        label: `:${ar.name}`,
+        shortcut: `${ar.kind}${groupLabel}`,
+        action: () => selectApiResource(ar),
       });
     }
 
@@ -94,8 +129,10 @@ export default function CommandPalette() {
 
   const filteredCommands = createMemo(() => {
     const q = input().toLowerCase().trim();
-    if (!q) return allCommands().slice(0, 15);
-    return allCommands().filter((c) => c.label.toLowerCase().includes(q) || (c.shortcut && c.shortcut.toLowerCase().includes(q))).slice(0, 15);
+    if (!q) return allCommands().slice(0, 20);
+    return allCommands().filter((c) =>
+      c.label.toLowerCase().includes(q) || (c.shortcut && c.shortcut.toLowerCase().includes(q))
+    ).slice(0, 20);
   });
 
   const [selectedIdx, setSelectedIdx] = createSignal(0);
@@ -145,7 +182,7 @@ export default function CommandPalette() {
             ref={inputRef}
             type="text"
             class="cmd-input"
-            placeholder=":pods, :ns default, :ctx my-cluster, :helm, :rbac..."
+            placeholder="Type a resource, namespace, or command..."
             value={input()}
             onInput={(e) => handleInput(e.currentTarget.value)}
             onKeyDown={handleKeyDown}

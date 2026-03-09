@@ -1,7 +1,10 @@
 use super::context::get_client;
+use futures::{StreamExt, TryStreamExt};
 use k8s_openapi::api::core::v1::Event;
 use kube::api::{Api, ListParams};
+use kube::runtime::watcher;
 use serde::{Deserialize, Serialize};
+use tauri::Emitter;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct K8sEvent {
@@ -54,11 +57,11 @@ pub async fn list_events(
                 first_seen: ev
                     .first_timestamp
                     .as_ref()
-                    .map(|t| t.0.format("%H:%M:%S").to_string()),
+                    .map(|t| t.0.to_rfc3339()),
                 last_seen: ev
                     .last_timestamp
                     .as_ref()
-                    .map(|t| t.0.format("%H:%M:%S").to_string()),
+                    .map(|t| t.0.to_rfc3339()),
                 source,
             }
         })
@@ -68,4 +71,56 @@ pub async fn list_events(
     events.sort_by(|a, b| b.last_seen.cmp(&a.last_seen));
 
     Ok(events)
+}
+
+/// Watch for new Warning events and emit them to the frontend in real-time
+#[tauri::command]
+pub async fn watch_events(
+    context: String,
+    app_handle: tauri::AppHandle,
+) -> Result<(), String> {
+    let client = get_client(&context).await?;
+    let api: Api<Event> = Api::all(client);
+
+    let watcher_config = watcher::Config::default();
+    let mut stream = watcher(api, watcher_config).boxed();
+
+    tokio::spawn(async move {
+        while let Ok(Some(event)) = stream.try_next().await {
+            if let watcher::Event::Apply(ev) | watcher::Event::InitApply(ev) = event {
+                // Only emit Warning events
+                if ev.type_.as_deref() != Some("Warning") {
+                    continue;
+                }
+
+                let source = ev
+                    .source
+                    .as_ref()
+                    .and_then(|s| s.component.clone());
+
+                let k8s_event = K8sEvent {
+                    kind: ev.involved_object.kind.clone(),
+                    name: ev.involved_object.name.clone(),
+                    namespace: ev.involved_object.namespace.clone(),
+                    reason: ev.reason.clone(),
+                    message: ev.message.clone(),
+                    event_type: ev.type_.clone(),
+                    count: ev.count,
+                    first_seen: ev
+                        .first_timestamp
+                        .as_ref()
+                        .map(|t| t.0.to_rfc3339()),
+                    last_seen: ev
+                        .last_timestamp
+                        .as_ref()
+                        .map(|t| t.0.to_rfc3339()),
+                    source,
+                };
+
+                let _ = app_handle.emit("cluster-alert", &k8s_event);
+            }
+        }
+    });
+
+    Ok(())
 }

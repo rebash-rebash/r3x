@@ -18,7 +18,6 @@ export default function HelmPanel() {
             <button class="action-btn" onClick={() => loadHelmReleases()} disabled={helmLoading()}>
               {helmLoading() ? "Loading..." : "Refresh"}
             </button>
-            <button class="action-btn" onClick={() => setShowHelmPanel(false)}>Close</button>
           </div>
         </div>
         <div class="view-panel-content">

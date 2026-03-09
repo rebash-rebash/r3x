@@ -55,7 +55,6 @@ export default function RbacPanel() {
             <button class="action-btn" onClick={() => loadRbac()} disabled={rbacLoading()}>
               {rbacLoading() ? "Loading..." : "Refresh"}
             </button>
-            <button class="action-btn" onClick={() => setShowRbacPanel(false)}>Close</button>
           </div>
         </div>
         <div class="view-panel-content">

@@ -3,7 +3,6 @@ import {
   topologyData,
   topologyLoading,
   showTopologyPanel,
-  setShowTopologyPanel,
   loadTopology,
   type TopoNode,
 } from "../stores/k8s";
@@ -30,7 +29,6 @@ function statusClass(status: string | null): string {
   if (s === "running" || s === "active" || s === "ready") return "topo-status-ok";
   if (s === "pending" || s === "waiting") return "topo-status-warn";
   if (s === "failed" || s === "error" || s === "crashloopbackoff") return "topo-status-err";
-  // replica counts like "3/3"
   if (s.includes("/")) {
     const [a, b] = s.split("/");
     if (a === b) return "topo-status-ok";
@@ -79,10 +77,10 @@ function TreeNode(props: { node: TopoNode; depth: number }) {
 export default function TopologyPanel() {
   return (
     <Show when={showTopologyPanel()}>
-      <div class="topology-panel">
-        <div class="topology-header">
-          <div class="topology-header-left">
-            <h3>Resource Topology</h3>
+      <div class="view-panel" style={{ overflow: "auto" }}>
+        <div class="view-panel-header">
+          <div style={{ display: "flex", "align-items": "center", gap: "12px" }}>
+            <h2>Resource Topology</h2>
             <span class="topo-legend">
               <span class="topo-icon topo-kind-deployment">D</span> Deployment
               <span class="topo-icon topo-kind-replicaset">RS</span> ReplicaSet
@@ -90,32 +88,20 @@ export default function TopologyPanel() {
               <span class="topo-icon topo-kind-container">C</span> Container
             </span>
           </div>
-          <div class="topology-header-right">
-            <button
-              class="action-btn"
-              onClick={() => loadTopology()}
-              disabled={topologyLoading()}
-            >
-              {topologyLoading() ? "Loading..." : "Refresh"}
-            </button>
-            <button
-              class="detail-close"
-              onClick={() => setShowTopologyPanel(false)}
-            >
-              x
-            </button>
-          </div>
+          <button class="action-btn" onClick={() => loadTopology()} disabled={topologyLoading()}>
+            {topologyLoading() ? "Loading..." : "Refresh"}
+          </button>
         </div>
 
-        <Show when={topologyLoading()}>
-          <div class="loading-overlay">
-            <span class="spinner" />
-            Building topology...
-          </div>
-        </Show>
+        <div class="view-panel-content">
+          <Show when={topologyLoading()}>
+            <div class="loading-overlay">
+              <span class="spinner" />
+              Building topology...
+            </div>
+          </Show>
 
-        <Show when={!topologyLoading()}>
-          <div class="topology-tree">
+          <Show when={!topologyLoading()}>
             <Show
               when={topologyData().length > 0}
               fallback={
@@ -129,8 +115,8 @@ export default function TopologyPanel() {
                 {(node) => <TreeNode node={node} depth={0} />}
               </For>
             </Show>
-          </div>
-        </Show>
+          </Show>
+        </div>
       </div>
     </Show>
   );

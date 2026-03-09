@@ -8,26 +8,30 @@ import {
   runSecurityScan,
   securityScanning,
   showSecurityPanel,
-  setShowSecurityPanel,
   loadTopology,
   topologyLoading,
   showTopologyPanel,
-  setShowTopologyPanel,
   crds,
   loadCustomResources,
   CrdInfo,
-  loadClusterMetrics,
-  metricsLoading,
-  showMetricsPanel,
-  setShowMetricsPanel,
   loadHelmReleases,
   helmLoading,
   showHelmPanel,
-  setShowHelmPanel,
   loadRbac,
   rbacLoading,
   showRbacPanel,
-  setShowRbacPanel,
+  loadClusterHealth,
+  healthLoading,
+  showHealthPanel,
+  showNetpolPanel,
+  setShowNetpolPanel,
+  showDashboard,
+  setShowDashboard,
+  loadClusterOverview,
+  showEventsPanel,
+  loadEvents,
+  eventsLoading,
+  closeAllViewPanels,
 } from "../stores/k8s";
 
 export default function Sidebar() {
@@ -60,6 +64,7 @@ export default function Sidebar() {
   }
 
   function handleKindClick(kind: string) {
+    closeAllViewPanels();
     setActiveResourceKind(kind);
     setSelectedResource(null);
     loadResources();
@@ -87,6 +92,18 @@ export default function Sidebar() {
       <div class="sidebar-section">
         <SectionHeader title="Workloads" section="workloads" />
         <Show when={expandedSections().workloads}>
+          <button
+            class={`sidebar-item ${showDashboard() ? "active" : ""}`}
+            onClick={() => {
+              if (showDashboard()) { closeAllViewPanels(); return; }
+              closeAllViewPanels();
+              loadClusterOverview();
+              setShowDashboard(true);
+            }}
+          >
+            <span class="icon">O</span>
+            Overview
+          </button>
           <For each={RESOURCE_KINDS.filter((k) =>
             ["pods", "deployments", "statefulsets", "daemonsets", "replicasets", "jobs", "cronjobs"].includes(k.key)
           )}>
@@ -145,7 +162,7 @@ export default function Sidebar() {
         <SectionHeader title="Storage" section="storage" />
         <Show when={expandedSections().storage}>
           <For each={RESOURCE_KINDS.filter((k) =>
-            ["persistentvolumeclaims"].includes(k.key)
+            ["persistentvolumes", "persistentvolumeclaims"].includes(k.key)
           )}>
             {(kind) => (
               <button
@@ -226,11 +243,9 @@ export default function Sidebar() {
           <button
             class={`sidebar-item ${showTopologyPanel() ? "active" : ""}`}
             onClick={() => {
-              if (!showTopologyPanel()) {
-                loadTopology();
-              } else {
-                setShowTopologyPanel(!showTopologyPanel());
-              }
+              if (showTopologyPanel()) { closeAllViewPanels(); return; }
+              closeAllViewPanels();
+              loadTopology();
             }}
             disabled={topologyLoading()}
           >
@@ -238,27 +253,11 @@ export default function Sidebar() {
             {topologyLoading() ? "Loading..." : "Topology"}
           </button>
           <button
-            class={`sidebar-item ${showMetricsPanel() ? "active" : ""}`}
-            onClick={() => {
-              if (!showMetricsPanel()) {
-                loadClusterMetrics();
-              } else {
-                setShowMetricsPanel(false);
-              }
-            }}
-            disabled={metricsLoading()}
-          >
-            <span class="icon">D</span>
-            {metricsLoading() ? "Loading..." : "Dashboard"}
-          </button>
-          <button
             class={`sidebar-item ${showHelmPanel() ? "active" : ""}`}
             onClick={() => {
-              if (!showHelmPanel()) {
-                loadHelmReleases();
-              } else {
-                setShowHelmPanel(false);
-              }
+              if (showHelmPanel()) { closeAllViewPanels(); return; }
+              closeAllViewPanels();
+              loadHelmReleases();
             }}
             disabled={helmLoading()}
           >
@@ -268,16 +267,49 @@ export default function Sidebar() {
           <button
             class={`sidebar-item ${showRbacPanel() ? "active" : ""}`}
             onClick={() => {
-              if (!showRbacPanel()) {
-                loadRbac();
-              } else {
-                setShowRbacPanel(false);
-              }
+              if (showRbacPanel()) { closeAllViewPanels(); return; }
+              closeAllViewPanels();
+              loadRbac();
             }}
             disabled={rbacLoading()}
           >
             <span class="icon">R</span>
             {rbacLoading() ? "Loading..." : "RBAC"}
+          </button>
+          <button
+            class={`sidebar-item ${showHealthPanel() ? "active" : ""}`}
+            onClick={() => {
+              if (showHealthPanel()) { closeAllViewPanels(); return; }
+              closeAllViewPanels();
+              loadClusterHealth();
+            }}
+            disabled={healthLoading()}
+          >
+            <span class="icon">+</span>
+            {healthLoading() ? "Analyzing..." : "Health Score"}
+          </button>
+          <button
+            class={`sidebar-item ${showNetpolPanel() ? "active" : ""}`}
+            onClick={() => {
+              if (showNetpolPanel()) { closeAllViewPanels(); return; }
+              closeAllViewPanels();
+              setShowNetpolPanel(true);
+            }}
+          >
+            <span class="icon">N</span>
+            Net Policies
+          </button>
+          <button
+            class={`sidebar-item ${showEventsPanel() ? "active" : ""}`}
+            onClick={() => {
+              if (showEventsPanel()) { closeAllViewPanels(); return; }
+              closeAllViewPanels();
+              loadEvents();
+            }}
+            disabled={eventsLoading()}
+          >
+            <span class="icon">E</span>
+            {eventsLoading() ? "Loading..." : "Events Log"}
           </button>
         </Show>
       </div>
@@ -288,11 +320,9 @@ export default function Sidebar() {
           <button
             class={`sidebar-item ${showSecurityPanel() ? "active" : ""}`}
             onClick={() => {
-              if (!showSecurityPanel()) {
-                runSecurityScan();
-              } else {
-                setShowSecurityPanel(!showSecurityPanel());
-              }
+              if (showSecurityPanel()) { closeAllViewPanels(); return; }
+              closeAllViewPanels();
+              runSecurityScan();
             }}
             disabled={securityScanning()}
           >

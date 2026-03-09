@@ -8,7 +8,12 @@ import {
   setActiveResourceKind,
   showHelmPanel,
   showRbacPanel,
-  showMetricsPanel,
+  showNetpolPanel,
+  showDashboard,
+  showTopologyPanel,
+  showSecurityPanel,
+  showEventsPanel,
+  showHealthPanel,
 } from "./stores/k8s";
 import { toggleTheme } from "./stores/theme";
 import Sidebar from "./components/Sidebar";
@@ -22,6 +27,9 @@ import CommandPalette, { setShowCommand } from "./components/CommandPalette";
 import HelmPanel from "./components/HelmPanel";
 import RbacPanel from "./components/RbacPanel";
 import KeyboardBar from "./components/KeyboardBar";
+import HealthPanel from "./components/HealthPanel";
+import NetpolPanel from "./components/NetpolPanel";
+import EventsPanel from "./components/EventsPanel";
 import "./styles/global.css";
 
 function App() {
@@ -110,18 +118,34 @@ function App() {
           </div>
         </Show>
 
-        <Show when={showHelmPanel() || showRbacPanel() || showMetricsPanel()} fallback={
-          <>
-            <ResourceTable />
-            <DetailPanel />
-          </>
-        }>
-          <HelmPanel />
-          <RbacPanel />
+        <Show when={showDashboard()}>
           <ClusterDashboard />
         </Show>
-        <SecurityPanel />
-        <TopologyPanel />
+        <Show when={showHelmPanel()}>
+          <HelmPanel />
+        </Show>
+        <Show when={showRbacPanel()}>
+          <RbacPanel />
+        </Show>
+        <Show when={showNetpolPanel()}>
+          <NetpolPanel />
+        </Show>
+        <Show when={showSecurityPanel()}>
+          <SecurityPanel />
+        </Show>
+        <Show when={showTopologyPanel()}>
+          <TopologyPanel />
+        </Show>
+        <Show when={showEventsPanel()}>
+          <EventsPanel />
+        </Show>
+        <Show when={showHealthPanel()}>
+          <HealthPanel />
+        </Show>
+        <Show when={!showDashboard() && !showHelmPanel() && !showRbacPanel() && !showTopologyPanel() && !showSecurityPanel() && !showEventsPanel() && !showHealthPanel() && !showNetpolPanel()}>
+          <ResourceTable />
+          <DetailPanel />
+        </Show>
         <CommandPalette />
         <KeyboardBar />
       </div>

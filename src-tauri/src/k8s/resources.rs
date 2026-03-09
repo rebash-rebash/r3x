@@ -2,7 +2,8 @@ use super::context::get_client;
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment, ReplicaSet, StatefulSet};
 use k8s_openapi::api::batch::v1::{CronJob, Job};
 use k8s_openapi::api::core::v1::{
-    ConfigMap, Namespace, Node, PersistentVolumeClaim, Pod, Secret, Service, ServiceAccount,
+    ConfigMap, Namespace, Node, PersistentVolume, PersistentVolumeClaim, Pod, Secret, Service,
+    ServiceAccount,
 };
 use k8s_openapi::api::networking::v1::{Ingress, NetworkPolicy};
 use kube::api::{Api, ListParams};
@@ -100,6 +101,7 @@ pub async fn list_resources(
             list_typed_resources::<PersistentVolumeClaim>(&client, &namespace, "PersistentVolumeClaim", ls)
                 .await
         }
+        "persistentvolumes" => list_pvs(&client).await,
         "nodes" => list_nodes(&client).await,
         _ => Err(format!("Unknown resource kind: {}", kind)),
     }
@@ -147,6 +149,38 @@ where
                 namespace: meta.namespace,
                 kind: kind.to_string(),
                 status: extract_status(&extra),
+                age: format_age(meta.creation_timestamp.as_ref()),
+                labels: meta.labels.unwrap_or_default(),
+                extra,
+            }
+        })
+        .collect();
+
+    Ok(resources)
+}
+
+async fn list_pvs(client: &Client) -> Result<Vec<K8sResource>, String> {
+    let api: Api<PersistentVolume> = Api::all(client.clone());
+    let list = api
+        .list(&ListParams::default())
+        .await
+        .map_err(|e| format!("Failed to list persistent volumes: {}", e))?;
+
+    let resources = list
+        .items
+        .into_iter()
+        .map(|pv| {
+            let meta = pv.metadata.clone();
+            let status_str = pv
+                .status
+                .as_ref()
+                .and_then(|s| s.phase.clone());
+            let extra = serde_json::to_value(&pv).unwrap_or(serde_json::Value::Null);
+            K8sResource {
+                name: meta.name.unwrap_or_default(),
+                namespace: None,
+                kind: "PersistentVolume".to_string(),
+                status: status_str,
                 age: format_age(meta.creation_timestamp.as_ref()),
                 labels: meta.labels.unwrap_or_default(),
                 extra,
@@ -227,6 +261,7 @@ pub async fn get_resource_yaml(
         "PersistentVolumeClaim" => {
             get_yaml::<PersistentVolumeClaim>(&client, &namespace, &name).await
         }
+        "PersistentVolume" => get_yaml_cluster::<PersistentVolume>(&client, &name).await,
         "Node" => get_yaml_cluster::<Node>(&client, &name).await,
         _ => get_yaml_dynamic(&client, &namespace, &kind, &name).await,
     }?;
@@ -530,6 +565,7 @@ fn kind_to_plural(kind: &str) -> String {
         "Ingress" => "ingresses",
         "NetworkPolicy" => "networkpolicies",
         "ServiceAccount" => "serviceaccounts",
+        "PersistentVolume" => "persistentvolumes",
         "PersistentVolumeClaim" => "persistentvolumeclaims",
         "Namespace" => "namespaces",
         "Node" => "nodes",

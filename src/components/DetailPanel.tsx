@@ -22,10 +22,37 @@ import {
   NodeInfo,
   getNodeDetails,
   K8sEvent,
+  WorkloadLogLine,
+  getWorkloadLogs,
+  streamWorkloadLogs,
+  pushLogAlert,
+  TrafficDistribution,
+  getTrafficDistribution,
+  benchmarkResult, setBenchmarkResult,
+  benchmarking,
+  benchmarkProgress,
+  benchmarkDuration, setBenchmarkDuration,
+  benchmarkInterval, setBenchmarkInterval,
+  benchmarkPodName,
+  startBenchmark,
+  RestartHistory,
+  getRestartHistory,
+  CostEstimation,
+  estimateCost,
+  ImageScanResult,
+  scanImages,
+  AutoscalerInfo,
+  getAutoscalers,
+  CronJobDetail,
+  getCronJobDetail,
+  triggerCronJob,
+  DiffResult,
+  diffResources,
+  resources,
 } from "../stores/k8s";
 import Terminal from "./Terminal";
 
-type DetailTab = "yaml" | "containers" | "pods" | "logs" | "labels" | "exec" | "describe" | "events" | "benchmark";
+type DetailTab = "yaml" | "containers" | "pods" | "logs" | "labels" | "exec" | "describe" | "events" | "benchmark" | "traffic" | "restarts" | "cost" | "images" | "hpa" | "cronjob" | "diff";
 
 export default function DetailPanel() {
   const [activeTab, setActiveTab] = createSignal<DetailTab>("yaml");
@@ -56,13 +83,29 @@ export default function DetailPanel() {
   const [resourceEvents, setResourceEvents] = createSignal<K8sEvent[]>([]);
   const [eventsLoading, setEventsLoading] = createSignal(false);
   const [copied, setCopied] = createSignal(false);
-  const [benchmarkResult, setBenchmarkResult] = createSignal<any>(null);
-  const [benchmarking, setBenchmarking] = createSignal(false);
-  const [benchmarkProgress, setBenchmarkProgress] = createSignal<{ sample: number; total: number } | null>(null);
-  const [benchmarkDuration, setBenchmarkDuration] = createSignal(60);
-  const [benchmarkInterval, setBenchmarkInterval] = createSignal(5);
+  const [workloadLogs, setWorkloadLogs] = createSignal<WorkloadLogLine[]>([]);
+  const [workloadLogFilter, setWorkloadLogFilter] = createSignal("");
+  const [workloadLogsLoading, setWorkloadLogsLoading] = createSignal(false);
+  const [workloadStreaming, setWorkloadStreaming] = createSignal(false);
   let execTabCounter = 1;
   let unlistenStream: (() => void) | null = null;
+  let unlistenWorkloadStream: (() => void) | null = null;
+  const [trafficData, setTrafficData] = createSignal<TrafficDistribution | null>(null);
+  const [trafficLoading, setTrafficLoading] = createSignal(false);
+  const [restartData, setRestartData] = createSignal<RestartHistory | null>(null);
+  const [restartLoading, setRestartLoading] = createSignal(false);
+  const [costData, setCostData] = createSignal<CostEstimation | null>(null);
+  const [costLoading, setCostLoading] = createSignal(false);
+  const [imageData, setImageData] = createSignal<ImageScanResult | null>(null);
+  const [imageLoading, setImageLoading] = createSignal(false);
+  const [hpaData, setHpaData] = createSignal<AutoscalerInfo | null>(null);
+  const [hpaLoading, setHpaLoading] = createSignal(false);
+  const [cronJobData, setCronJobData] = createSignal<CronJobDetail | null>(null);
+  const [cronJobLoading, setCronJobLoading] = createSignal(false);
+  const [triggering, setTriggering] = createSignal(false);
+  const [diffData, setDiffData] = createSignal<DiffResult | null>(null);
+  const [diffLoading, setDiffLoading] = createSignal(false);
+  const [diffTarget, setDiffTarget] = createSignal("");
 
   const resource = () => selectedResource();
   const isPod = () => resource()?.kind === "Pod";
@@ -71,6 +114,11 @@ export default function DetailPanel() {
     return k === "Deployment" || k === "StatefulSet" || k === "DaemonSet" || k === "ReplicaSet";
   };
   const isNode = () => resource()?.kind === "Node";
+  const isCronJob = () => resource()?.kind === "CronJob";
+  const isConfigOrSecret = () => {
+    const k = resource()?.kind;
+    return k === "ConfigMap" || k === "Secret";
+  };
   const isRestartable = () => {
     const k = resource()?.kind;
     return k === "Deployment" || k === "StatefulSet" || k === "DaemonSet";
@@ -87,7 +135,7 @@ export default function DetailPanel() {
     setDetailLoading(true);
     setResourcePods([]);
     const workloadKinds = ["Deployment", "StatefulSet", "DaemonSet", "ReplicaSet"];
-    setActiveTab(res.kind === "Pod" ? "containers" : workloadKinds.includes(res.kind) ? "pods" : res.kind === "Node" ? "describe" : "yaml");
+    setActiveTab(res.kind === "Pod" ? "containers" : workloadKinds.includes(res.kind) ? "pods" : res.kind === "Node" ? "describe" : res.kind === "CronJob" ? "cronjob" : "yaml");
     setNodeInfo(null);
     setNodeAction("");
     setConfirmDrain(false);
@@ -101,6 +149,9 @@ export default function DetailPanel() {
     setActiveExecTab(1);
     execTabCounter = 1;
     if (unlistenStream) { unlistenStream(); unlistenStream = null; }
+    if (unlistenWorkloadStream) { unlistenWorkloadStream(); unlistenWorkloadStream = null; }
+    setWorkloadStreaming(false);
+    setWorkloadLogs([]);
 
     try {
       const y = await getResourceYaml(
@@ -281,14 +332,222 @@ export default function DetailPanel() {
     setDetailLoading(false);
   }
 
+  async function loadWorkloadLogs() {
+    const res = resource();
+    if (!res || !isWorkload()) return;
+    setWorkloadLogsLoading(true);
+    try {
+      const lines = await getWorkloadLogs(
+        res.namespace || "default",
+        res.kind,
+        res.name,
+        100
+      );
+      setWorkloadLogs(lines);
+    } catch (e: any) {
+      setWorkloadLogs([{ pod: "error", container: "", timestamp: "", message: `[ERROR] ${e}` }]);
+    }
+    setWorkloadLogsLoading(false);
+  }
+
+  const filteredWorkloadLogs = () => {
+    const filter = workloadLogFilter().toLowerCase();
+    if (!filter) return workloadLogs();
+    return workloadLogs().filter(
+      (l) =>
+        l.message.toLowerCase().includes(filter) ||
+        l.pod.toLowerCase().includes(filter) ||
+        l.container.toLowerCase().includes(filter)
+    );
+  };
+
+  function exportWorkloadLogs() {
+    const res = resource();
+    const logLines = filteredWorkloadLogs();
+    if (!res || logLines.length === 0) return;
+    const content = logLines
+      .map((l) => `${l.timestamp} [${l.pod}/${l.container}] ${l.message}`)
+      .join("\n");
+    const blob = new Blob([content], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${res.name}-aggregated-logs.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function toggleWorkloadStreaming() {
+    const res = resource();
+    if (!res || !isWorkload()) return;
+
+    if (workloadStreaming()) {
+      if (unlistenWorkloadStream) { unlistenWorkloadStream(); unlistenWorkloadStream = null; }
+      setWorkloadStreaming(false);
+      return;
+    }
+
+    try {
+      const eventName = await streamWorkloadLogs(
+        res.namespace || "default",
+        res.kind,
+        res.name
+      );
+      const unlisten = await listen<WorkloadLogLine>(eventName, (event) => {
+        setWorkloadLogs((prev) => [...prev.slice(-500), event.payload]);
+        const l = event.payload;
+        pushLogAlert(l.pod, l.container, resource()?.namespace || "default", l.message);
+      });
+      unlistenWorkloadStream = unlisten;
+      setWorkloadStreaming(true);
+    } catch (e: any) {
+      setWorkloadLogs((prev) => [...prev, { pod: "error", container: "", timestamp: "", message: `[ERROR] ${e}` }]);
+    }
+  }
+
+  async function loadTraffic() {
+    const res = resource();
+    if (!res || !isWorkload()) return;
+    setTrafficLoading(true);
+    try {
+      const data = await getTrafficDistribution(res.namespace || "default", res.kind, res.name);
+      setTrafficData(data);
+    } catch (e: any) {
+      setTrafficData(null);
+    }
+    setTrafficLoading(false);
+  }
+
+  async function loadRestarts() {
+    const res = resource();
+    if (!res) return;
+    setRestartLoading(true);
+    try {
+      const data = await getRestartHistory(res.namespace || "default", res.kind, res.name);
+      setRestartData(data);
+    } catch (e: any) {
+      setRestartData(null);
+    }
+    setRestartLoading(false);
+  }
+
+  async function loadCost() {
+    const res = resource();
+    if (!res || !isWorkload()) return;
+    setCostLoading(true);
+    try {
+      const data = await estimateCost(res.namespace || "default", res.kind, res.name);
+      setCostData(data);
+    } catch (e: any) {
+      setCostData(null);
+    }
+    setCostLoading(false);
+  }
+
+  async function loadImages() {
+    const res = resource();
+    if (!res) return;
+    setImageLoading(true);
+    try {
+      const data = await scanImages(res.namespace || "default", res.kind, res.name);
+      setImageData(data);
+    } catch (e: any) {
+      setImageData(null);
+    }
+    setImageLoading(false);
+  }
+
   createEffect(() => {
     if (activeTab() === "logs" && isPod()) {
       loadLogs();
     }
+    if (activeTab() === "logs" && isWorkload()) {
+      loadWorkloadLogs();
+    }
     if (activeTab() === "events") {
       loadResourceEvents();
     }
+    if (activeTab() === "traffic" && isWorkload()) {
+      loadTraffic();
+    }
+    if (activeTab() === "restarts") {
+      loadRestarts();
+    }
+    if (activeTab() === "cost" && isWorkload()) {
+      loadCost();
+    }
+    if (activeTab() === "images") {
+      loadImages();
+    }
+    if (activeTab() === "hpa" && isWorkload()) {
+      loadHpa();
+    }
+    if (activeTab() === "cronjob" && isCronJob()) {
+      loadCronJob();
+    }
   });
+
+  async function loadHpa() {
+    const res = resource();
+    if (!res) return;
+    setHpaLoading(true);
+    try {
+      const data = await getAutoscalers(res.namespace || "default");
+      setHpaData(data);
+    } catch {
+      setHpaData(null);
+    }
+    setHpaLoading(false);
+  }
+
+  async function loadCronJob() {
+    const res = resource();
+    if (!res || res.kind !== "CronJob") return;
+    setCronJobLoading(true);
+    try {
+      const data = await getCronJobDetail(res.namespace || "default", res.name);
+      setCronJobData(data);
+    } catch {
+      setCronJobData(null);
+    }
+    setCronJobLoading(false);
+  }
+
+  async function handleTriggerCronJob() {
+    const res = resource();
+    if (!res) return;
+    setTriggering(true);
+    try {
+      const jobName = await triggerCronJob(res.namespace || "default", res.name);
+      alert(`Job created: ${jobName}`);
+      await loadCronJob();
+    } catch (e: any) {
+      alert(`Trigger failed: ${e}`);
+    }
+    setTriggering(false);
+  }
+
+  async function loadDiff() {
+    const res = resource();
+    const target = diffTarget();
+    if (!res || !target) return;
+    setDiffLoading(true);
+    try {
+      const data = await diffResources(res.namespace || "default", res.kind, res.name, target);
+      setDiffData(data);
+    } catch {
+      setDiffData(null);
+    }
+    setDiffLoading(false);
+  }
+
+  function logLevelClass(msg: string): string {
+    const upper = msg.toUpperCase();
+    if (upper.includes("ERROR") || upper.includes("FATAL") || upper.includes("PANIC") || upper.includes("CRIT")) return "log-level-error";
+    if (upper.includes("WARN")) return "log-level-warn";
+    if (upper.includes("DEBUG") || upper.includes("TRACE")) return "log-level-debug";
+    return "";
+  }
 
   const filteredLogs = () => {
     const filter = logFilter().toLowerCase();
@@ -342,6 +601,7 @@ export default function DetailPanel() {
       );
       const unlisten = await listen<string>(eventName, (event) => {
         setLogs((prev) => [...prev.slice(-500), event.payload]);
+        pushLogAlert(res.name, selectedContainer() || "", res.namespace || "default", event.payload);
       });
       unlistenStream = unlisten;
       setStreaming(true);
@@ -460,6 +720,58 @@ export default function DetailPanel() {
                 >
                   Pods
                 </button>
+                <button
+                  class={`detail-tab ${activeTab() === "logs" ? "active" : ""}`}
+                  onClick={() => setActiveTab("logs")}
+                >
+                  Logs
+                </button>
+                <button
+                  class={`detail-tab ${activeTab() === "traffic" ? "active" : ""}`}
+                  onClick={() => setActiveTab("traffic")}
+                >
+                  Traffic
+                </button>
+                <button
+                  class={`detail-tab ${activeTab() === "cost" ? "active" : ""}`}
+                  onClick={() => setActiveTab("cost")}
+                >
+                  Cost
+                </button>
+                <button
+                  class={`detail-tab ${activeTab() === "restarts" ? "active" : ""}`}
+                  onClick={() => setActiveTab("restarts")}
+                >
+                  Restarts
+                </button>
+                <button
+                  class={`detail-tab ${activeTab() === "images" ? "active" : ""}`}
+                  onClick={() => setActiveTab("images")}
+                >
+                  Images
+                </button>
+                <button
+                  class={`detail-tab ${activeTab() === "hpa" ? "active" : ""}`}
+                  onClick={() => setActiveTab("hpa")}
+                >
+                  HPA/VPA
+                </button>
+              </Show>
+              <Show when={isCronJob()}>
+                <button
+                  class={`detail-tab ${activeTab() === "cronjob" ? "active" : ""}`}
+                  onClick={() => setActiveTab("cronjob")}
+                >
+                  Jobs
+                </button>
+              </Show>
+              <Show when={isConfigOrSecret()}>
+                <button
+                  class={`detail-tab ${activeTab() === "diff" ? "active" : ""}`}
+                  onClick={() => setActiveTab("diff")}
+                >
+                  Diff
+                </button>
               </Show>
               <Show when={isPod()}>
                 <button
@@ -507,6 +819,18 @@ export default function DetailPanel() {
                   onClick={() => setActiveTab("benchmark")}
                 >
                   Benchmark
+                </button>
+                <button
+                  class={`detail-tab ${activeTab() === "restarts" ? "active" : ""}`}
+                  onClick={() => setActiveTab("restarts")}
+                >
+                  Restarts
+                </button>
+                <button
+                  class={`detail-tab ${activeTab() === "images" ? "active" : ""}`}
+                  onClick={() => setActiveTab("images")}
+                >
+                  Images
                 </button>
               </Show>
             </div>
@@ -925,7 +1249,7 @@ export default function DetailPanel() {
             })()}
           </Show>
 
-          <Show when={!detailLoading() && activeTab() === "logs"}>
+          <Show when={!detailLoading() && activeTab() === "logs" && isPod()}>
             <div class="log-controls">
               <Show when={containers().length > 1}>
                 <select
@@ -966,7 +1290,7 @@ export default function DetailPanel() {
                   const timestamp = parts[0] || "";
                   const message = parts.slice(1).join(" ");
                   return (
-                    <div class="log-line">
+                    <div class={`log-line ${logLevelClass(message)}`}>
                       <span class="log-timestamp">{timestamp}</span>
                       <span class="log-message">{message}</span>
                     </div>
@@ -974,6 +1298,62 @@ export default function DetailPanel() {
                 }}
               </For>
               <Show when={filteredLogs().length === 0}>
+                <div class="empty-state">
+                  <p>No logs available</p>
+                </div>
+              </Show>
+            </div>
+          </Show>
+
+          <Show when={!detailLoading() && activeTab() === "logs" && isWorkload()}>
+            <div class="log-controls">
+              <input
+                type="text"
+                placeholder="Filter logs (pod, container, message)..."
+                value={workloadLogFilter()}
+                onInput={(e) => setWorkloadLogFilter(e.currentTarget.value)}
+              />
+              <button class="action-btn" onClick={loadWorkloadLogs}>
+                Refresh
+              </button>
+              <button
+                class={`action-btn ${workloadStreaming() ? "streaming-active" : ""}`}
+                onClick={toggleWorkloadStreaming}
+              >
+                {workloadStreaming() ? "Stop Stream" : "Stream"}
+              </button>
+              <button class="action-btn" onClick={exportWorkloadLogs} title="Download logs">
+                Export
+              </button>
+              <span class="resource-count" style={{ "margin-left": "auto" }}>
+                {filteredWorkloadLogs().length} lines from {new Set(workloadLogs().map(l => l.pod)).size} pod(s)
+                {workloadStreaming() ? " (live)" : ""}
+              </span>
+            </div>
+            <Show when={workloadLogsLoading()}>
+              <div class="loading-overlay">
+                <span class="spinner" />
+                Loading logs from all pods...
+              </div>
+            </Show>
+            <div class="log-viewer">
+              <For each={filteredWorkloadLogs()}>
+                {(line) => {
+                  const podHash = line.pod.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
+                  const colors = ["#4fc3f7", "#81c784", "#ffb74d", "#f06292", "#ba68c8", "#4dd0e1", "#aed581", "#ff8a65", "#9575cd", "#e57373"];
+                  const podColor = colors[podHash % colors.length];
+                  return (
+                    <div class={`log-line ${logLevelClass(line.message)}`}>
+                      <span class="log-timestamp">{line.timestamp}</span>
+                      <span class="log-pod-tag" style={{ color: podColor, "font-weight": "600", "margin-right": "6px", "font-size": "11px" }}>
+                        [{line.pod}/{line.container}]
+                      </span>
+                      <span class="log-message">{line.message}</span>
+                    </div>
+                  );
+                }}
+              </For>
+              <Show when={!workloadLogsLoading() && filteredWorkloadLogs().length === 0}>
                 <div class="empty-state">
                   <p>No logs available</p>
                 </div>
@@ -1195,6 +1575,687 @@ export default function DetailPanel() {
             </For>
           </Show>
 
+          <Show when={activeTab() === "traffic" && isWorkload()}>
+            <div style={{ padding: "12px 16px" }}>
+              <Show when={trafficLoading()}>
+                <div style={{ display: "flex", "align-items": "center", gap: "8px", padding: "20px 0" }}>
+                  <span class="spinner" />
+                  <span>Sampling live traffic (3s)...</span>
+                </div>
+              </Show>
+              <Show when={!trafficLoading() && !trafficData()}>
+                <div style={{ color: "var(--text-muted)", padding: "20px 0", "text-align": "center" }}>
+                  No traffic data available. Requires kubelet stats API access.
+                </div>
+              </Show>
+              <Show when={!trafficLoading() && trafficData()}>
+                {(() => {
+                  const data = trafficData()!;
+
+                  function balanceColor(score: number): string {
+                    if (score >= 80) return "var(--success)";
+                    if (score >= 50) return "var(--warning)";
+                    return "var(--danger)";
+                  }
+
+                  const maxRate = Math.max(...data.pods.map(p => p.total_rate), 0.001);
+
+                  return (
+                    <div>
+                      <div style={{ display: "flex", "justify-content": "space-between", "align-items": "center", "margin-bottom": "16px" }}>
+                        <div>
+                          <span style={{ "font-weight": "600" }}>Live Network Throughput</span>
+                          <span style={{ color: "var(--text-muted)", "font-size": "11px", "margin-left": "8px" }}>
+                            {data.pod_count} pod{data.pod_count !== 1 ? "s" : ""} — sampled over {data.sample_interval_secs.toFixed(1)}s
+                          </span>
+                        </div>
+                        <button class="action-btn" onClick={loadTraffic}>Refresh</button>
+                      </div>
+
+                      <div style={{ display: "grid", "grid-template-columns": "1fr 1fr 1fr", gap: "12px", "margin-bottom": "16px" }}>
+                        <div style={{ background: "var(--surface)", padding: "10px 12px", "border-radius": "6px", "border": "1px solid var(--border)" }}>
+                          <div style={{ "font-size": "10px", color: "var(--text-muted)", "text-transform": "uppercase", "margin-bottom": "4px" }}>RX Rate</div>
+                          <div style={{ "font-size": "16px", "font-weight": "600", color: "var(--accent)" }}>{data.total_rx_rate_fmt}</div>
+                        </div>
+                        <div style={{ background: "var(--surface)", padding: "10px 12px", "border-radius": "6px", "border": "1px solid var(--border)" }}>
+                          <div style={{ "font-size": "10px", color: "var(--text-muted)", "text-transform": "uppercase", "margin-bottom": "4px" }}>TX Rate</div>
+                          <div style={{ "font-size": "16px", "font-weight": "600", color: "var(--info)" }}>{data.total_tx_rate_fmt}</div>
+                        </div>
+                        <div style={{ background: "var(--surface)", padding: "10px 12px", "border-radius": "6px", "border": "1px solid var(--border)" }}>
+                          <div style={{ "font-size": "10px", color: "var(--text-muted)", "text-transform": "uppercase", "margin-bottom": "4px" }}>Balance Score</div>
+                          <div style={{ "font-size": "16px", "font-weight": "600", color: balanceColor(data.balance_score) }}>{data.balance_score.toFixed(0)}%</div>
+                        </div>
+                      </div>
+
+                      <div style={{ "margin-bottom": "8px" }}>
+                        <div style={{ "font-size": "11px", color: "var(--text-secondary)", "text-transform": "uppercase", "margin-bottom": "8px" }}>
+                          Per-Pod Throughput
+                        </div>
+                        <For each={data.pods}>
+                          {(pod) => (
+                            <div style={{ "margin-bottom": "10px" }}>
+                              <div style={{ display: "flex", "justify-content": "space-between", "align-items": "center", "margin-bottom": "3px" }}>
+                                <div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
+                                  <span style={{ "font-size": "12px", "font-weight": "500" }}>{pod.pod_name}</span>
+                                  <span style={{ "font-size": "10px", color: "var(--text-muted)", background: "var(--surface)", padding: "1px 5px", "border-radius": "3px" }}>
+                                    {pod.age}
+                                  </span>
+                                  <span style={{ "font-size": "10px", color: "var(--text-muted)", background: "var(--surface)", padding: "1px 5px", "border-radius": "3px" }}>
+                                    {pod.node}
+                                  </span>
+                                </div>
+                                <div style={{ "font-size": "11px", "font-weight": "500" }}>
+                                  {pod.pct_of_total.toFixed(1)}% — {pod.total_rate_fmt}
+                                </div>
+                              </div>
+                              <div class="usage-bar" style={{ height: "16px", position: "relative" }}>
+                                <div
+                                  style={{
+                                    position: "absolute",
+                                    height: "100%",
+                                    width: `${(pod.rx_rate / maxRate) * 100}%`,
+                                    background: "var(--accent)",
+                                    opacity: "0.8",
+                                    "border-radius": "3px 0 0 3px",
+                                  }}
+                                />
+                                <div
+                                  style={{
+                                    position: "absolute",
+                                    height: "100%",
+                                    left: `${(pod.rx_rate / maxRate) * 100}%`,
+                                    width: `${(pod.tx_rate / maxRate) * 100}%`,
+                                    background: "var(--info)",
+                                    opacity: "0.8",
+                                    "border-radius": "0 3px 3px 0",
+                                  }}
+                                />
+                              </div>
+                              <div style={{ display: "flex", gap: "12px", "font-size": "10px", color: "var(--text-muted)", "margin-top": "2px" }}>
+                                <span>RX: {pod.rx_rate_fmt}</span>
+                                <span>TX: {pod.tx_rate_fmt}</span>
+                                <span style={{ "margin-left": "auto", opacity: "0.6" }}>cumulative: {pod.rx_fmt} / {pod.tx_fmt}</span>
+                              </div>
+                            </div>
+                          )}
+                        </For>
+                      </div>
+
+                      <div style={{ display: "flex", gap: "12px", "font-size": "10px", color: "var(--text-muted)", "border-top": "1px solid var(--border)", "padding-top": "8px" }}>
+                        <span style={{ display: "flex", "align-items": "center", gap: "4px" }}>
+                          <span style={{ width: "8px", height: "8px", background: "var(--accent)", "border-radius": "2px", display: "inline-block" }} /> RX
+                        </span>
+                        <span style={{ display: "flex", "align-items": "center", gap: "4px" }}>
+                          <span style={{ width: "8px", height: "8px", background: "var(--info)", "border-radius": "2px", display: "inline-block" }} /> TX
+                        </span>
+                        <span style={{ "margin-left": "auto" }}>
+                          Live rates measured over 3s snapshot | Balance: 100% = even
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </Show>
+            </div>
+          </Show>
+
+          <Show when={activeTab() === "restarts"}>
+            <div style={{ padding: "12px 16px" }}>
+              <Show when={restartLoading()}>
+                <div class="loading-overlay">
+                  <span class="spinner" />
+                  Loading restart history...
+                </div>
+              </Show>
+              <Show when={!restartLoading() && !restartData()}>
+                <div class="empty-state">
+                  <p>No restart data available</p>
+                </div>
+              </Show>
+              <Show when={!restartLoading() && restartData()}>
+                {(() => {
+                  const data = restartData()!;
+
+                  function reasonColor(reason: string): string {
+                    if (reason === "OOMKilled") return "var(--danger)";
+                    if (reason === "Error" || reason === "ContainerCannotRun") return "var(--danger)";
+                    if (reason === "CrashLoopBackOff") return "var(--danger)";
+                    if (reason === "Completed") return "var(--success)";
+                    return "var(--warning)";
+                  }
+
+                  function formatTimeAgo(isoStr: string | null): string {
+                    if (!isoStr) return "-";
+                    const d = new Date(isoStr);
+                    if (isNaN(d.getTime())) return isoStr;
+                    const secs = Math.floor((Date.now() - d.getTime()) / 1000);
+                    if (secs < 60) return "just now";
+                    if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
+                    if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
+                    return `${Math.floor(secs / 86400)}d ago`;
+                  }
+
+                  return (
+                    <div>
+                      <div style={{ display: "flex", "justify-content": "space-between", "align-items": "center", "margin-bottom": "16px" }}>
+                        <div>
+                          <span style={{ "font-weight": "600" }}>Restart History</span>
+                          <span style={{ color: "var(--text-muted)", "font-size": "11px", "margin-left": "8px" }}>
+                            {data.pod_count} pod{data.pod_count !== 1 ? "s" : ""}
+                          </span>
+                        </div>
+                        <button class="action-btn" onClick={loadRestarts}>Refresh</button>
+                      </div>
+
+                      <div style={{ display: "grid", "grid-template-columns": "1fr 1fr", gap: "12px", "margin-bottom": "16px" }}>
+                        <div style={{ background: "var(--surface)", padding: "10px 12px", "border-radius": "6px", border: "1px solid var(--border)" }}>
+                          <div style={{ "font-size": "10px", color: "var(--text-muted)", "text-transform": "uppercase", "margin-bottom": "4px" }}>Total Restarts</div>
+                          <div style={{ "font-size": "20px", "font-weight": "600", color: data.total_restarts > 0 ? "var(--warning)" : "var(--success)" }}>
+                            {data.total_restarts}
+                          </div>
+                        </div>
+                        <div style={{ background: "var(--surface)", padding: "10px 12px", "border-radius": "6px", border: "1px solid var(--border)" }}>
+                          <div style={{ "font-size": "10px", color: "var(--text-muted)", "text-transform": "uppercase", "margin-bottom": "4px" }}>Pods with Restarts</div>
+                          <div style={{ "font-size": "20px", "font-weight": "600", color: "var(--text-primary)" }}>
+                            {data.pods.filter(p => p.total_restarts > 0).length} / {data.pod_count}
+                          </div>
+                        </div>
+                      </div>
+
+                      <Show when={data.timeline.length > 0}>
+                        <div style={{ "margin-bottom": "16px" }}>
+                          <div style={{ "font-size": "11px", color: "var(--text-secondary)", "text-transform": "uppercase", "margin-bottom": "8px" }}>
+                            Recent Restart Events
+                          </div>
+                          <div class="restart-timeline">
+                            <For each={data.timeline}>
+                              {(evt) => (
+                                <div class="restart-timeline-item">
+                                  <div class="restart-timeline-dot" style={{ background: reasonColor(evt.reason) }} />
+                                  <div class="restart-timeline-content">
+                                    <div style={{ display: "flex", "align-items": "center", gap: "6px", "flex-wrap": "wrap" }}>
+                                      <span class="restart-reason-badge" style={{ background: reasonColor(evt.reason) }}>
+                                        {evt.reason}
+                                      </span>
+                                      <span style={{ "font-size": "12px", "font-weight": "500" }}>{evt.container}</span>
+                                      <span style={{ "font-size": "11px", color: "var(--text-muted)" }}>in {evt.pod_name}</span>
+                                      <Show when={evt.exit_code !== 0}>
+                                        <span style={{ "font-size": "10px", color: "var(--danger)", background: "var(--surface)", padding: "1px 5px", "border-radius": "3px" }}>
+                                          exit: {evt.exit_code}
+                                        </span>
+                                      </Show>
+                                    </div>
+                                    <Show when={evt.message}>
+                                      <div style={{ "font-size": "11px", color: "var(--text-secondary)", "margin-top": "2px" }}>
+                                        {evt.message!.length > 150 ? evt.message!.slice(0, 150) + "..." : evt.message}
+                                      </div>
+                                    </Show>
+                                    <div style={{ "font-size": "10px", color: "var(--text-muted)", "margin-top": "2px" }}>
+                                      {formatTimeAgo(evt.finished_at)}
+                                      <Show when={evt.finished_at}>
+                                        <span style={{ "margin-left": "8px" }}>{new Date(evt.finished_at!).toLocaleString()}</span>
+                                      </Show>
+                                    </div>
+                                  </div>
+                                </div>
+                              )}
+                            </For>
+                          </div>
+                        </div>
+                      </Show>
+
+                      <div style={{ "font-size": "11px", color: "var(--text-secondary)", "text-transform": "uppercase", "margin-bottom": "8px" }}>
+                        Per-Pod Breakdown
+                      </div>
+                      <table class="resource-table">
+                        <thead>
+                          <tr>
+                            <th>Pod</th>
+                            <th>Container</th>
+                            <th>Restarts</th>
+                            <th>State</th>
+                            <th>Last Reason</th>
+                            <th>Last Exit</th>
+                            <th>Last Restart</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <For each={data.pods}>
+                            {(pod) => (
+                              <For each={pod.containers}>
+                                {(c, idx) => (
+                                  <tr>
+                                    <td>{idx() === 0 ? pod.pod_name : ""}</td>
+                                    <td>{c.name}</td>
+                                    <td style={{ color: c.restart_count > 0 ? "var(--warning)" : "var(--text-secondary)", "font-weight": c.restart_count > 0 ? "600" : "400" }}>
+                                      {c.restart_count}
+                                    </td>
+                                    <td>
+                                      <span class={`status ${c.current_state === "Running" ? "status-running" : c.current_state === "Waiting" || c.current_state === "CrashLoopBackOff" ? "status-pending" : "status-failed"}`}>
+                                        <span class="status-dot" />
+                                        {c.current_state}
+                                      </span>
+                                    </td>
+                                    <td>
+                                      <Show when={c.last_reason}>
+                                        <span style={{ color: reasonColor(c.last_reason!), "font-size": "11px" }}>{c.last_reason}</span>
+                                      </Show>
+                                      <Show when={!c.last_reason}>
+                                        <span style={{ color: "var(--text-muted)" }}>-</span>
+                                      </Show>
+                                    </td>
+                                    <td style={{ color: c.last_exit_code != null && c.last_exit_code !== 0 ? "var(--danger)" : "var(--text-secondary)" }}>
+                                      {c.last_exit_code != null ? c.last_exit_code : "-"}
+                                    </td>
+                                    <td style={{ "font-size": "11px", color: "var(--text-secondary)" }}>
+                                      {formatTimeAgo(c.last_finished_at)}
+                                    </td>
+                                  </tr>
+                                )}
+                              </For>
+                            )}
+                          </For>
+                        </tbody>
+                      </table>
+
+                      <Show when={data.total_restarts === 0}>
+                        <div style={{ "text-align": "center", padding: "20px", color: "var(--success)" }}>
+                          No restarts recorded — all containers are stable.
+                        </div>
+                      </Show>
+                    </div>
+                  );
+                })()}
+              </Show>
+            </div>
+          </Show>
+
+          <Show when={activeTab() === "cost" && isWorkload()}>
+            <div style={{ padding: "12px 16px" }}>
+              <Show when={costLoading()}>
+                <div class="loading-overlay">
+                  <span class="spinner" />
+                  Estimating costs...
+                </div>
+              </Show>
+              <Show when={!costLoading() && !costData()}>
+                <div class="empty-state">
+                  <p>No cost data available. Ensure pods have CPU/memory requests set.</p>
+                </div>
+              </Show>
+              <Show when={!costLoading() && costData()}>
+                {(() => {
+                  const data = costData()!;
+
+                  function formatUSD(val: number): string {
+                    if (val < 0.01) return "<$0.01";
+                    return `$${val.toFixed(2)}`;
+                  }
+
+                  return (
+                    <div>
+                      <div style={{ display: "flex", "justify-content": "space-between", "align-items": "center", "margin-bottom": "16px" }}>
+                        <div>
+                          <span style={{ "font-weight": "600" }}>Resource Cost Estimation</span>
+                          <span style={{ color: "var(--text-muted)", "font-size": "11px", "margin-left": "8px" }}>
+                            {data.pod_count} pod{data.pod_count !== 1 ? "s" : ""} — {data.replica_count > 0 ? `${data.replica_count} replicas` : "DaemonSet"}
+                          </span>
+                        </div>
+                        <button class="action-btn" onClick={loadCost}>Refresh</button>
+                      </div>
+
+                      <div style={{ display: "grid", "grid-template-columns": "1fr 1fr", gap: "12px", "margin-bottom": "16px" }}>
+                        <div style={{ background: "var(--surface)", padding: "10px 12px", "border-radius": "6px", border: "1px solid var(--border)" }}>
+                          <div style={{ "font-size": "10px", color: "var(--text-muted)", "text-transform": "uppercase", "margin-bottom": "4px" }}>Total CPU Requests</div>
+                          <div style={{ "font-size": "16px", "font-weight": "600", color: "var(--accent)" }}>{data.total_cpu_request_fmt}</div>
+                        </div>
+                        <div style={{ background: "var(--surface)", padding: "10px 12px", "border-radius": "6px", border: "1px solid var(--border)" }}>
+                          <div style={{ "font-size": "10px", color: "var(--text-muted)", "text-transform": "uppercase", "margin-bottom": "4px" }}>Total Memory Requests</div>
+                          <div style={{ "font-size": "16px", "font-weight": "600", color: "var(--info)" }}>{data.total_memory_request_fmt}</div>
+                        </div>
+                      </div>
+
+                      {(() => {
+                        // Group providers by name
+                        const providerNames = [...new Set(data.providers.map(p => p.provider))];
+                        const tierLabel = (t: string) => {
+                          const labels: Record<string, string> = {
+                            "on-demand": "On-Demand",
+                            "spot": "Spot / Preemptible",
+                            "committed-1yr": "1yr Committed",
+                            "committed-3yr": "3yr Committed",
+                            "savings-1yr": "1yr Savings Plan",
+                            "savings-3yr": "3yr Savings Plan",
+                            "reserved-1yr": "1yr Reserved",
+                            "reserved-3yr": "3yr Reserved",
+                          };
+                          return labels[t] || t;
+                        };
+
+                        return (
+                          <div>
+                            <div style={{ "font-size": "11px", color: "var(--text-secondary)", "text-transform": "uppercase", "margin-bottom": "8px" }}>
+                              Monthly Cost Comparison
+                            </div>
+
+                            <div style={{ display: "grid", "grid-template-columns": `repeat(${providerNames.length}, 1fr)`, gap: "12px", "margin-bottom": "16px" }}>
+                              <For each={providerNames}>
+                                {(name) => {
+                                  const tiers = data.providers.filter(p => p.provider === name);
+                                  return (
+                                    <div class="cost-provider-card" style={{ padding: "0" }}>
+                                      <div style={{ padding: "10px 12px", "border-bottom": "1px solid var(--border)", "font-weight": "600", "font-size": "12px" }}>
+                                        {name}
+                                      </div>
+                                      <For each={tiers}>
+                                        {(tier) => (
+                                          <div
+                                            style={{
+                                              padding: "8px 12px",
+                                              display: "flex",
+                                              "justify-content": "space-between",
+                                              "align-items": "center",
+                                              "border-bottom": "1px solid var(--border)",
+                                              background: tier.tier === "spot" ? "color-mix(in srgb, var(--success) 5%, transparent)" : "transparent",
+                                            }}
+                                          >
+                                            <div>
+                                              <div style={{ "font-size": "11px", "font-weight": "500" }}>
+                                                {tierLabel(tier.tier)}
+                                              </div>
+                                              <Show when={tier.savings_pct > 0}>
+                                                <span style={{
+                                                  "font-size": "9px",
+                                                  "font-weight": "700",
+                                                  color: "#fff",
+                                                  background: "var(--success)",
+                                                  padding: "1px 4px",
+                                                  "border-radius": "3px",
+                                                  "font-family": "var(--font-mono)",
+                                                }}>
+                                                  -{tier.savings_pct.toFixed(0)}%
+                                                </span>
+                                              </Show>
+                                            </div>
+                                            <div style={{
+                                              "font-size": tier.tier === "spot" ? "16px" : "14px",
+                                              "font-weight": tier.tier === "spot" ? "700" : "600",
+                                              color: tier.tier === "spot" ? "var(--success)" : "var(--accent)",
+                                            }}>
+                                              {formatUSD(tier.total_monthly)}
+                                              <span style={{ "font-size": "10px", color: "var(--text-muted)", "font-weight": "400" }}>/mo</span>
+                                            </div>
+                                          </div>
+                                        )}
+                                      </For>
+                                    </div>
+                                  );
+                                }}
+                              </For>
+                            </div>
+                          </div>
+                        );
+                      })()}
+
+                      <Show when={data.pods.length > 0}>
+                        <div style={{ "font-size": "11px", color: "var(--text-secondary)", "text-transform": "uppercase", "margin-bottom": "8px" }}>
+                          Per-Pod Breakdown (on-demand GKE pricing)
+                        </div>
+                        <table class="resource-table">
+                          <thead>
+                            <tr>
+                              <th>Pod</th>
+                              <th>Container</th>
+                              <th>CPU Req</th>
+                              <th>Mem Req</th>
+                              <th>CPU $/mo</th>
+                              <th>Mem $/mo</th>
+                              <th>Total $/mo</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <For each={data.pods}>
+                              {(pod) => (
+                                <For each={pod.containers}>
+                                  {(c, idx) => (
+                                    <tr>
+                                      <td>{idx() === 0 ? pod.pod_name : ""}</td>
+                                      <td>{c.name}</td>
+                                      <td style={{ color: c.cpu_request === "0" ? "var(--text-muted)" : "var(--text-primary)" }}>
+                                        {c.cpu_request || "0"}
+                                      </td>
+                                      <td style={{ color: c.memory_request === "0" ? "var(--text-muted)" : "var(--text-primary)" }}>
+                                        {c.memory_request || "0"}
+                                      </td>
+                                      <td class="metrics-cell" style={{ color: "var(--accent)" }}>{formatUSD(c.cpu_monthly)}</td>
+                                      <td class="metrics-cell" style={{ color: "var(--info)" }}>{formatUSD(c.memory_monthly)}</td>
+                                      <td class="metrics-cell" style={{ "font-weight": "600" }}>{formatUSD(c.total_monthly)}</td>
+                                    </tr>
+                                  )}
+                                </For>
+                              )}
+                            </For>
+                          </tbody>
+                        </table>
+                      </Show>
+
+                      <div style={{ "font-size": "11px", color: "var(--text-muted)", "border-top": "1px solid var(--border)", "padding-top": "8px", "margin-top": "12px" }}>
+                        <strong>How to read:</strong> Cost = (CPU requests x CPU rate + Memory requests x Memory rate) x 730 hrs/mo.
+                        Per-pod breakdown uses on-demand GKE rates. Spot prices are approximate (~60-91% off on-demand) and fluctuate.
+                        Committed/Savings plans require upfront commitment. Pods without resource requests show $0.
+                      </div>
+                    </div>
+                  );
+                })()}
+              </Show>
+            </div>
+          </Show>
+
+          <Show when={activeTab() === "images"}>
+            <div style={{ padding: "12px 16px" }}>
+              <Show when={imageLoading()}>
+                <div style={{ display: "flex", "align-items": "center", gap: "8px", padding: "20px 0" }}>
+                  <span class="spinner" />
+                  <span>Scanning images with Trivy (this may take a moment)...</span>
+                </div>
+              </Show>
+              <Show when={!imageLoading() && !imageData()}>
+                <div class="empty-state">
+                  <p>No image data available</p>
+                </div>
+              </Show>
+              <Show when={!imageLoading() && imageData()}>
+                {(() => {
+                  const data = imageData()!;
+
+                  function sevColor(sev: string): string {
+                    if (sev === "critical") return "var(--danger)";
+                    if (sev === "high") return "#e57373";
+                    if (sev === "medium") return "var(--warning)";
+                    if (sev === "low") return "var(--info)";
+                    return "var(--text-muted)";
+                  }
+
+                  function riskColor(score: number): string {
+                    if (score >= 60) return "var(--danger)";
+                    if (score >= 30) return "var(--warning)";
+                    if (score > 0) return "var(--info)";
+                    return "var(--success)";
+                  }
+
+                  return (
+                    <div>
+                      <div style={{ display: "flex", "justify-content": "space-between", "align-items": "center", "margin-bottom": "12px" }}>
+                        <div>
+                          <span style={{ "font-weight": "600" }}>Image Vulnerability Scan</span>
+                          <span style={{ color: "var(--text-muted)", "font-size": "11px", "margin-left": "8px" }}>
+                            {data.unique_images} image{data.unique_images !== 1 ? "s" : ""}
+                            {data.trivy_available ? " — powered by Trivy" : " — static analysis only"}
+                          </span>
+                        </div>
+                        <button class="action-btn" onClick={loadImages}>Re-scan</button>
+                      </div>
+
+                      <Show when={!data.trivy_available}>
+                        <div style={{ background: "color-mix(in srgb, var(--warning) 10%, transparent)", border: "1px solid var(--warning)", "border-radius": "6px", padding: "8px 12px", "margin-bottom": "12px", "font-size": "11px" }}>
+                          Trivy not found. Install it for full CVE scanning: <code style={{ background: "var(--surface)", padding: "1px 4px", "border-radius": "3px" }}>brew install trivy</code>
+                        </div>
+                      </Show>
+
+                      <div style={{ display: "grid", "grid-template-columns": "1fr 1fr 1fr 1fr 1fr", gap: "10px", "margin-bottom": "16px" }}>
+                        <div style={{ background: "var(--surface)", padding: "8px 10px", "border-radius": "6px", border: "1px solid var(--border)", "text-align": "center" }}>
+                          <div style={{ "font-size": "10px", color: "var(--text-muted)", "text-transform": "uppercase", "margin-bottom": "2px" }}>Risk</div>
+                          <div style={{ "font-size": "18px", "font-weight": "700", color: riskColor(data.overall_risk) }}>{data.overall_risk}</div>
+                        </div>
+                        <div style={{ background: "var(--surface)", padding: "8px 10px", "border-radius": "6px", border: `1px solid ${data.critical_count > 0 ? "var(--danger)" : "var(--border)"}`, "text-align": "center" }}>
+                          <div style={{ "font-size": "10px", color: "var(--text-muted)", "text-transform": "uppercase", "margin-bottom": "2px" }}>Critical</div>
+                          <div style={{ "font-size": "18px", "font-weight": "700", color: data.critical_count > 0 ? "var(--danger)" : "var(--success)" }}>{data.critical_count}</div>
+                        </div>
+                        <div style={{ background: "var(--surface)", padding: "8px 10px", "border-radius": "6px", border: "1px solid var(--border)", "text-align": "center" }}>
+                          <div style={{ "font-size": "10px", color: "var(--text-muted)", "text-transform": "uppercase", "margin-bottom": "2px" }}>High</div>
+                          <div style={{ "font-size": "18px", "font-weight": "700", color: data.high_count > 0 ? "#e57373" : "var(--success)" }}>{data.high_count}</div>
+                        </div>
+                        <div style={{ background: "var(--surface)", padding: "8px 10px", "border-radius": "6px", border: "1px solid var(--border)", "text-align": "center" }}>
+                          <div style={{ "font-size": "10px", color: "var(--text-muted)", "text-transform": "uppercase", "margin-bottom": "2px" }}>Medium</div>
+                          <div style={{ "font-size": "18px", "font-weight": "700", color: data.medium_count > 0 ? "var(--warning)" : "var(--success)" }}>{data.medium_count}</div>
+                        </div>
+                        <div style={{ background: "var(--surface)", padding: "8px 10px", "border-radius": "6px", border: "1px solid var(--border)", "text-align": "center" }}>
+                          <div style={{ "font-size": "10px", color: "var(--text-muted)", "text-transform": "uppercase", "margin-bottom": "2px" }}>Low</div>
+                          <div style={{ "font-size": "18px", "font-weight": "700", color: data.low_count > 0 ? "var(--info)" : "var(--success)" }}>{data.low_count}</div>
+                        </div>
+                      </div>
+
+                      <For each={data.images}>
+                        {(img) => (
+                          <div class="image-card">
+                            <div style={{ display: "flex", "justify-content": "space-between", "align-items": "flex-start", "margin-bottom": "6px" }}>
+                              <div>
+                                <div style={{ "font-size": "12px", "font-weight": "600", "word-break": "break-all" }}>{img.repository}</div>
+                                <div style={{ "font-size": "11px", color: "var(--text-muted)" }}>
+                                  {img.registry} — tag: <span style={{ color: img.tag === "latest" ? "var(--danger)" : "var(--accent)", "font-weight": "500" }}>{img.tag}</span>
+                                </div>
+                              </div>
+                              <div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
+                                <Show when={img.trivy_scanned}>
+                                  <span style={{ "font-size": "9px", color: "var(--success)", "font-family": "var(--font-mono)" }}>TRIVY</span>
+                                </Show>
+                                <span style={{ "font-size": "10px", color: "var(--text-muted)" }}>
+                                  {img.pod_count} pod{img.pod_count !== 1 ? "s" : ""}
+                                </span>
+                                <span class="image-risk-badge" style={{ background: img.risk_score > 0 ? riskColor(img.risk_score) : "var(--success)" }}>
+                                  {img.risk_score > 0 ? `risk: ${img.risk_score}` : "clean"}
+                                </span>
+                              </div>
+                            </div>
+
+                            {/* CVE Summary from Trivy */}
+                            <Show when={img.cve_summary}>
+                              {(() => {
+                                const cve = img.cve_summary!;
+                                return (
+                                  <div style={{ "margin-top": "6px" }}>
+                                    <div style={{ display: "flex", gap: "10px", "margin-bottom": "6px", "font-size": "11px" }}>
+                                      <span style={{ color: "var(--text-muted)" }}>CVEs:</span>
+                                      <Show when={cve.critical > 0}><span style={{ color: "var(--danger)", "font-weight": "700" }}>{cve.critical} CRITICAL</span></Show>
+                                      <Show when={cve.high > 0}><span style={{ color: "#e57373", "font-weight": "600" }}>{cve.high} HIGH</span></Show>
+                                      <Show when={cve.medium > 0}><span style={{ color: "var(--warning)" }}>{cve.medium} MEDIUM</span></Show>
+                                      <Show when={cve.low > 0}><span style={{ color: "var(--info)" }}>{cve.low} LOW</span></Show>
+                                      <span style={{ color: "var(--text-muted)", "margin-left": "auto" }}>{cve.total} total</span>
+                                    </div>
+                                    <Show when={cve.top_cves.length > 0}>
+                                      <table class="resource-table" style={{ "font-size": "11px" }}>
+                                        <thead>
+                                          <tr>
+                                            <th>CVE</th>
+                                            <th>Severity</th>
+                                            <th>Package</th>
+                                            <th>Installed</th>
+                                            <th>Fixed</th>
+                                            <th>Description</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          <For each={cve.top_cves}>
+                                            {(v) => (
+                                              <tr>
+                                                <td style={{ "font-family": "var(--font-mono)", "font-size": "10px", "white-space": "nowrap" }}>{v.id}</td>
+                                                <td>
+                                                  <span style={{ color: sevColor(v.severity), "font-weight": "700", "font-size": "9px", "text-transform": "uppercase", "font-family": "var(--font-mono)" }}>
+                                                    {v.severity}
+                                                  </span>
+                                                </td>
+                                                <td style={{ "font-weight": "500" }}>{v.pkg_name}</td>
+                                                <td style={{ color: "var(--text-secondary)", "font-family": "var(--font-mono)", "font-size": "10px" }}>{v.installed_version}</td>
+                                                <td style={{ color: v.fixed_version ? "var(--success)" : "var(--text-muted)", "font-family": "var(--font-mono)", "font-size": "10px" }}>
+                                                  {v.fixed_version || "no fix"}
+                                                </td>
+                                                <td style={{ color: "var(--text-secondary)", "max-width": "250px", overflow: "hidden", "text-overflow": "ellipsis", "white-space": "nowrap" }}>
+                                                  {v.title}
+                                                </td>
+                                              </tr>
+                                            )}
+                                          </For>
+                                        </tbody>
+                                      </table>
+                                    </Show>
+                                    <Show when={cve.total === 0}>
+                                      <div style={{ "font-size": "11px", color: "var(--success)", padding: "4px 0" }}>
+                                        No CVEs found by Trivy
+                                      </div>
+                                    </Show>
+                                  </div>
+                                );
+                              })()}
+                            </Show>
+
+                            {/* Trivy error */}
+                            <Show when={img.trivy_error}>
+                              <div style={{ "font-size": "11px", color: "var(--warning)", "margin-top": "4px" }}>
+                                Trivy scan failed: {img.trivy_error}
+                              </div>
+                            </Show>
+
+                            {/* Static findings */}
+                            <Show when={img.findings.length > 0}>
+                              <div style={{ "margin-top": "6px", "border-top": img.cve_summary ? "1px solid var(--border)" : "none", "padding-top": img.cve_summary ? "6px" : "0" }}>
+                                <Show when={img.cve_summary}>
+                                  <div style={{ "font-size": "10px", color: "var(--text-muted)", "text-transform": "uppercase", "margin-bottom": "4px" }}>Config Issues</div>
+                                </Show>
+                                <For each={img.findings}>
+                                  {(f) => (
+                                    <div class="image-finding">
+                                      <span class="image-finding-sev" style={{ color: sevColor(f.severity) }}>
+                                        {f.severity.toUpperCase()}
+                                      </span>
+                                      <span style={{ "font-weight": "500" }}>{f.title}</span>
+                                      <span style={{ color: "var(--text-secondary)" }}> — {f.description}</span>
+                                    </div>
+                                  )}
+                                </For>
+                              </div>
+                            </Show>
+
+                            <Show when={!img.cve_summary && !img.trivy_error && img.findings.length === 0}>
+                              <div style={{ "font-size": "11px", color: "var(--success)", "margin-top": "4px" }}>
+                                No issues found
+                              </div>
+                            </Show>
+                          </div>
+                        )}
+                      </For>
+
+                      <div style={{ "font-size": "11px", color: "var(--text-muted)", "border-top": "1px solid var(--border)", "padding-top": "8px", "margin-top": "12px" }}>
+                        {data.trivy_available
+                          ? "CVE data from Trivy (aquasecurity/trivy). Top 20 vulnerabilities shown per image, sorted by severity. Re-scan to refresh."
+                          : "Static analysis only. Install Trivy for full CVE scanning: brew install trivy"}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </Show>
+            </div>
+          </Show>
+
           <Show when={activeTab() === "benchmark" && isPod()}>
             <div style={{ padding: "12px 16px" }}>
               <Show when={!benchmarking() && !benchmarkResult()}>
@@ -1202,61 +2263,45 @@ export default function DetailPanel() {
                   <p style={{ color: "var(--text-secondary)", "font-size": "12px", "margin-bottom": "12px" }}>
                     Collect metrics samples over time to recommend optimal CPU/Memory requests and limits.
                   </p>
-                  <div style={{ display: "flex", gap: "16px", "align-items": "flex-end", "margin-bottom": "12px" }}>
+                  <div style={{ display: "flex", gap: "16px", "align-items": "flex-end", "margin-bottom": "12px", "flex-wrap": "wrap" }}>
                     <div class="benchmark-field">
-                      <label>Duration (seconds)</label>
+                      <label>Duration</label>
                       <select value={benchmarkDuration()} onChange={(e) => setBenchmarkDuration(parseInt(e.currentTarget.value))}>
                         <option value="30">30s (quick)</option>
-                        <option value="60">60s (default)</option>
+                        <option value="60">1 min</option>
                         <option value="120">2 min</option>
                         <option value="300">5 min</option>
                         <option value="600">10 min</option>
+                        <option value="1800">30 min</option>
+                        <option value="3600">1 hour</option>
                       </select>
                     </div>
                     <div class="benchmark-field">
-                      <label>Interval (seconds)</label>
+                      <label>Interval</label>
                       <select value={benchmarkInterval()} onChange={(e) => setBenchmarkInterval(parseInt(e.currentTarget.value))}>
                         <option value="3">3s</option>
-                        <option value="5">5s (default)</option>
+                        <option value="5">5s</option>
                         <option value="10">10s</option>
                         <option value="15">15s</option>
+                        <option value="30">30s</option>
+                        <option value="60">60s</option>
                       </select>
                     </div>
                     <button
                       class="action-btn"
                       style={{ padding: "6px 16px" }}
-                      onClick={async () => {
+                      onClick={() => {
                         const res = resource();
-                        const ctx = activeContext();
-                        if (!res || !ctx) return;
-                        setBenchmarking(true);
-                        setBenchmarkResult(null);
-                        setBenchmarkProgress(null);
-                        const unlisten = await listen<any>("benchmark-progress", (event) => {
-                          setBenchmarkProgress(event.payload);
-                        });
-                        try {
-                          const result = await invoke<any>("benchmark_pod", {
-                            context: ctx,
-                            namespace: res.namespace || "default",
-                            podName: res.name,
-                            durationSecs: benchmarkDuration(),
-                            intervalSecs: benchmarkInterval(),
-                          });
-                          setBenchmarkResult(result);
-                        } catch (e: any) {
-                          alert(`Benchmark failed: ${e}`);
-                        }
-                        unlisten();
-                        setBenchmarking(false);
-                        setBenchmarkProgress(null);
+                        if (!res) return;
+                        startBenchmark(res.namespace || "default", res.name);
                       }}
                     >
                       Start Benchmark
                     </button>
                   </div>
                   <div style={{ "font-size": "11px", color: "var(--text-muted)" }}>
-                    Samples: ~{Math.floor(benchmarkDuration() / benchmarkInterval())} | Requires metrics-server
+                    Samples: ~{Math.floor(benchmarkDuration() / benchmarkInterval())} | Requires metrics-server |
+                    Runs in background — you'll get a notification when done
                   </div>
                 </div>
               </Show>
@@ -1282,7 +2327,8 @@ export default function DetailPanel() {
                     </div>
                   </Show>
                   <div style={{ "font-size": "11px", color: "var(--text-muted)", "margin-top": "8px" }}>
-                    Collecting metrics every {benchmarkInterval()}s for {benchmarkDuration()}s...
+                    Benchmarking <strong>{benchmarkPodName()}</strong> — every {benchmarkInterval()}s for {benchmarkDuration() >= 60 ? `${Math.floor(benchmarkDuration() / 60)}m` : `${benchmarkDuration()}s`}
+                    <br />Runs in background — you can navigate away and will be notified when done.
                   </div>
                 </div>
               </Show>
@@ -1410,6 +2456,314 @@ export default function DetailPanel() {
                     </div>
                   );
                 })()}
+              </Show>
+            </div>
+          </Show>
+          {/* HPA/VPA Tab */}
+          <Show when={activeTab() === "hpa"}>
+            <div class="detail-content" style={{ padding: "16px" }}>
+              <Show when={hpaLoading()}>
+                <div style={{ color: "var(--text-secondary)", "font-size": "12px" }}>Loading autoscaler data...</div>
+              </Show>
+              <Show when={!hpaLoading() && hpaData()}>
+                {(() => {
+                  const data = hpaData()!;
+                  const resName = resource()?.name || "";
+                  const relevantHpas = data.hpas.filter(h => h.target_name === resName);
+                  const relevantVpas = data.vpas.filter(v => v.target_name === resName);
+                  return (
+                    <div>
+                      <Show when={relevantHpas.length === 0 && relevantVpas.length === 0}>
+                        <div style={{ color: "var(--text-secondary)", "font-size": "12px", padding: "20px", "text-align": "center" }}>
+                          No HPA or VPA configured for this workload
+                        </div>
+                      </Show>
+
+                      <For each={relevantHpas}>
+                        {(hpa) => (
+                          <div style={{ background: "var(--bg-secondary)", "border-radius": "8px", padding: "16px", "margin-bottom": "16px" }}>
+                            <div style={{ display: "flex", "justify-content": "space-between", "align-items": "center", "margin-bottom": "12px" }}>
+                              <div>
+                                <span style={{ "font-weight": "600", "font-size": "14px" }}>HPA: {hpa.name}</span>
+                                <span style={{ "font-size": "11px", color: "var(--text-secondary)", "margin-left": "8px" }}>Age: {hpa.age}</span>
+                              </div>
+                            </div>
+
+                            {/* Replica gauge */}
+                            <div style={{ display: "grid", "grid-template-columns": "repeat(4, 1fr)", gap: "12px", "margin-bottom": "16px" }}>
+                              <div style={{ "text-align": "center" }}>
+                                <div style={{ "font-size": "10px", color: "var(--text-secondary)" }}>Min</div>
+                                <div style={{ "font-size": "20px", "font-weight": "700" }}>{hpa.min_replicas}</div>
+                              </div>
+                              <div style={{ "text-align": "center" }}>
+                                <div style={{ "font-size": "10px", color: "var(--text-secondary)" }}>Current</div>
+                                <div style={{ "font-size": "20px", "font-weight": "700", color: "var(--accent)" }}>{hpa.current_replicas}</div>
+                              </div>
+                              <div style={{ "text-align": "center" }}>
+                                <div style={{ "font-size": "10px", color: "var(--text-secondary)" }}>Desired</div>
+                                <div style={{ "font-size": "20px", "font-weight": "700", color: hpa.desired_replicas !== hpa.current_replicas ? "var(--status-warning)" : "var(--status-running)" }}>{hpa.desired_replicas}</div>
+                              </div>
+                              <div style={{ "text-align": "center" }}>
+                                <div style={{ "font-size": "10px", color: "var(--text-secondary)" }}>Max</div>
+                                <div style={{ "font-size": "20px", "font-weight": "700" }}>{hpa.max_replicas}</div>
+                              </div>
+                            </div>
+
+                            {/* Replica bar */}
+                            <div style={{ height: "6px", background: "var(--bg-tertiary)", "border-radius": "3px", "margin-bottom": "16px", position: "relative" }}>
+                              <div style={{
+                                height: "100%", "border-radius": "3px", background: "var(--accent)",
+                                width: `${Math.min(100, ((hpa.current_replicas - hpa.min_replicas) / Math.max(1, hpa.max_replicas - hpa.min_replicas)) * 100)}%`,
+                              }} />
+                            </div>
+
+                            {/* Metrics */}
+                            <Show when={hpa.metrics.length > 0}>
+                              <h4 style={{ "font-size": "12px", "font-weight": "600", "margin-bottom": "8px" }}>Metrics</h4>
+                              <table class="resource-table" style={{ "margin-bottom": "12px" }}>
+                                <thead><tr><th>Metric</th><th>Type</th><th>Current</th><th>Target</th></tr></thead>
+                                <tbody>
+                                  <For each={hpa.metrics}>
+                                    {(m) => (
+                                      <tr>
+                                        <td style={{ "font-weight": "500" }}>{m.metric_name}</td>
+                                        <td style={{ color: "var(--text-secondary)" }}>{m.metric_type}</td>
+                                        <td style={{ color: "var(--accent)" }}>{m.current_value}</td>
+                                        <td>{m.target_value}</td>
+                                      </tr>
+                                    )}
+                                  </For>
+                                </tbody>
+                              </table>
+                            </Show>
+
+                            {/* Conditions */}
+                            <Show when={hpa.conditions.length > 0}>
+                              <h4 style={{ "font-size": "12px", "font-weight": "600", "margin-bottom": "8px" }}>Conditions</h4>
+                              <For each={hpa.conditions}>
+                                {(c) => (
+                                  <div style={{ "font-size": "11px", padding: "4px 0", display: "flex", gap: "8px", "border-bottom": "1px solid var(--bg-tertiary)" }}>
+                                    <span style={{ color: c.status === "True" ? "var(--status-running)" : "var(--status-error)", "font-weight": "600", width: "40px" }}>{c.status}</span>
+                                    <span style={{ "font-weight": "500", width: "140px" }}>{c.condition_type}</span>
+                                    <span style={{ color: "var(--text-secondary)" }}>{c.message}</span>
+                                  </div>
+                                )}
+                              </For>
+                            </Show>
+
+                            <Show when={hpa.last_scale_time}>
+                              <div style={{ "font-size": "11px", color: "var(--text-secondary)", "margin-top": "8px" }}>
+                                Last scaled: {hpa.last_scale_time}
+                              </div>
+                            </Show>
+                          </div>
+                        )}
+                      </For>
+
+                      <For each={relevantVpas}>
+                        {(vpa) => (
+                          <div style={{ background: "var(--bg-secondary)", "border-radius": "8px", padding: "16px", "margin-bottom": "16px" }}>
+                            <div style={{ "margin-bottom": "12px" }}>
+                              <span style={{ "font-weight": "600", "font-size": "14px" }}>VPA: {vpa.name}</span>
+                              <span style={{ "font-size": "11px", color: "var(--text-secondary)", "margin-left": "8px" }}>Mode: {vpa.update_mode}</span>
+                              <span style={{ "font-size": "11px", color: "var(--text-secondary)", "margin-left": "8px" }}>Age: {vpa.age}</span>
+                            </div>
+                            <Show when={vpa.recommendations.length > 0}>
+                              <table class="resource-table">
+                                <thead><tr><th>Container</th><th>Target CPU</th><th>Target Mem</th><th>Lower CPU</th><th>Upper CPU</th><th>Lower Mem</th><th>Upper Mem</th></tr></thead>
+                                <tbody>
+                                  <For each={vpa.recommendations}>
+                                    {(rec) => (
+                                      <tr>
+                                        <td style={{ "font-weight": "500" }}>{rec.container_name}</td>
+                                        <td style={{ color: "var(--accent)", "font-weight": "600" }}>{rec.target_cpu}</td>
+                                        <td style={{ color: "var(--info)", "font-weight": "600" }}>{rec.target_memory}</td>
+                                        <td style={{ color: "var(--text-secondary)" }}>{rec.lower_cpu}</td>
+                                        <td style={{ color: "var(--text-secondary)" }}>{rec.upper_cpu}</td>
+                                        <td style={{ color: "var(--text-secondary)" }}>{rec.lower_memory}</td>
+                                        <td style={{ color: "var(--text-secondary)" }}>{rec.upper_memory}</td>
+                                      </tr>
+                                    )}
+                                  </For>
+                                </tbody>
+                              </table>
+                            </Show>
+                            <Show when={vpa.recommendations.length === 0}>
+                              <div style={{ color: "var(--text-secondary)", "font-size": "12px" }}>No recommendations available yet</div>
+                            </Show>
+                          </div>
+                        )}
+                      </For>
+
+                      {/* Show all HPAs/VPAs in namespace */}
+                      <Show when={data.hpas.length > relevantHpas.length || data.vpas.length > relevantVpas.length}>
+                        <div style={{ "margin-top": "16px", "font-size": "11px", color: "var(--text-secondary)" }}>
+                          Other autoscalers in namespace: {data.hpas.length} HPA(s), {data.vpas.length} VPA(s)
+                        </div>
+                      </Show>
+                    </div>
+                  );
+                })()}
+              </Show>
+            </div>
+          </Show>
+
+          {/* CronJob Tab */}
+          <Show when={activeTab() === "cronjob"}>
+            <div class="detail-content" style={{ padding: "16px" }}>
+              <Show when={cronJobLoading()}>
+                <div style={{ color: "var(--text-secondary)", "font-size": "12px" }}>Loading job history...</div>
+              </Show>
+              <Show when={!cronJobLoading() && cronJobData()}>
+                {(() => {
+                  const data = cronJobData()!;
+                  return (
+                    <div>
+                      {/* CronJob info */}
+                      <div style={{ display: "grid", "grid-template-columns": "repeat(auto-fit, minmax(120px, 1fr))", gap: "12px", "margin-bottom": "16px" }}>
+                        <div style={{ background: "var(--bg-secondary)", padding: "10px", "border-radius": "6px", "text-align": "center" }}>
+                          <div style={{ "font-size": "10px", color: "var(--text-secondary)" }}>Schedule</div>
+                          <div style={{ "font-size": "13px", "font-weight": "600", color: "var(--accent)" }}>{data.schedule}</div>
+                        </div>
+                        <div style={{ background: "var(--bg-secondary)", padding: "10px", "border-radius": "6px", "text-align": "center" }}>
+                          <div style={{ "font-size": "10px", color: "var(--text-secondary)" }}>Suspend</div>
+                          <div style={{ "font-size": "13px", "font-weight": "600", color: data.suspend ? "var(--status-error)" : "var(--status-running)" }}>
+                            {data.suspend ? "Yes" : "No"}
+                          </div>
+                        </div>
+                        <div style={{ background: "var(--bg-secondary)", padding: "10px", "border-radius": "6px", "text-align": "center" }}>
+                          <div style={{ "font-size": "10px", color: "var(--text-secondary)" }}>Active</div>
+                          <div style={{ "font-size": "13px", "font-weight": "600" }}>{data.active_count}</div>
+                        </div>
+                        <div style={{ background: "var(--bg-secondary)", padding: "10px", "border-radius": "6px", "text-align": "center" }}>
+                          <div style={{ "font-size": "10px", color: "var(--text-secondary)" }}>Concurrency</div>
+                          <div style={{ "font-size": "13px", "font-weight": "600" }}>{data.concurrency_policy}</div>
+                        </div>
+                      </div>
+
+                      {/* Trigger button */}
+                      <div style={{ "margin-bottom": "16px" }}>
+                        <button
+                          class="btn btn-sm btn-primary"
+                          onClick={handleTriggerCronJob}
+                          disabled={triggering()}
+                        >
+                          {triggering() ? "Triggering..." : "Trigger Now"}
+                        </button>
+                      </div>
+
+                      {/* Job history */}
+                      <h4 style={{ "font-size": "12px", "font-weight": "600", "margin-bottom": "8px" }}>
+                        Job History ({data.jobs.length})
+                      </h4>
+                      <Show when={data.jobs.length > 0}>
+                        <table class="resource-table">
+                          <thead>
+                            <tr><th>Job</th><th>Status</th><th>Completions</th><th>Duration</th><th>Age</th></tr>
+                          </thead>
+                          <tbody>
+                            <For each={data.jobs}>
+                              {(job) => (
+                                <tr>
+                                  <td style={{ "font-size": "11px" }}>{job.name}</td>
+                                  <td>
+                                    <span style={{
+                                      "font-size": "10px", padding: "1px 6px", "border-radius": "3px",
+                                      background: job.status === "Succeeded" ? "var(--status-running)22" :
+                                        job.status === "Failed" ? "var(--status-error)22" : "var(--status-warning)22",
+                                      color: job.status === "Succeeded" ? "var(--status-running)" :
+                                        job.status === "Failed" ? "var(--status-error)" : "var(--status-warning)",
+                                    }}>{job.status}</span>
+                                  </td>
+                                  <td>{job.completions}</td>
+                                  <td>{job.duration_secs != null ? `${job.duration_secs}s` : "-"}</td>
+                                  <td style={{ color: "var(--text-secondary)" }}>{job.age}</td>
+                                </tr>
+                              )}
+                            </For>
+                          </tbody>
+                        </table>
+                      </Show>
+                      <Show when={data.jobs.length === 0}>
+                        <div style={{ color: "var(--text-secondary)", "font-size": "12px", "text-align": "center", padding: "20px" }}>
+                          No jobs found for this CronJob
+                        </div>
+                      </Show>
+                    </div>
+                  );
+                })()}
+              </Show>
+            </div>
+          </Show>
+
+          {/* Diff Tab */}
+          <Show when={activeTab() === "diff"}>
+            <div class="detail-content" style={{ padding: "16px" }}>
+              <div style={{ display: "flex", "align-items": "center", gap: "8px", "margin-bottom": "16px" }}>
+                <span style={{ "font-size": "12px", color: "var(--text-secondary)" }}>Compare with:</span>
+                <select
+                  style={{ "font-size": "12px", padding: "4px 8px", background: "var(--bg-secondary)", border: "1px solid var(--border-color)", "border-radius": "4px", color: "var(--text-primary)" }}
+                  value={diffTarget()}
+                  onChange={(e) => setDiffTarget(e.currentTarget.value)}
+                >
+                  <option value="">Select a {resource()?.kind}...</option>
+                  <For each={resources().filter(r => r.kind === resource()?.kind && r.name !== resource()?.name)}>
+                    {(r) => <option value={r.name}>{r.name}</option>}
+                  </For>
+                </select>
+                <button class="btn btn-sm" onClick={loadDiff} disabled={diffLoading() || !diffTarget()}>
+                  {diffLoading() ? "Comparing..." : "Compare"}
+                </button>
+              </div>
+
+              <Show when={diffData()}>
+                {(() => {
+                  const data = diffData()!;
+                  return (
+                    <div>
+                      <div style={{ display: "flex", gap: "12px", "margin-bottom": "12px", "font-size": "12px" }}>
+                        <span style={{ color: "var(--status-running)" }}>+{data.additions} additions</span>
+                        <span style={{ color: "var(--status-error)" }}>-{data.deletions} deletions</span>
+                        <Show when={!data.has_changes}>
+                          <span style={{ color: "var(--text-secondary)" }}>No differences found</span>
+                        </Show>
+                      </div>
+                      <div style={{
+                        background: "var(--bg-secondary)", "border-radius": "6px", padding: "0",
+                        "font-family": "monospace", "font-size": "11px", overflow: "auto",
+                        "max-height": "500px", border: "1px solid var(--border-color)",
+                      }}>
+                        <For each={data.lines}>
+                          {(line) => (
+                            <div style={{
+                              padding: "1px 8px", "white-space": "pre",
+                              background: line.line_type === "add" ? "#22c55e11" :
+                                line.line_type === "remove" ? "#ef444411" : "transparent",
+                              color: line.line_type === "add" ? "var(--status-running)" :
+                                line.line_type === "remove" ? "var(--status-error)" : "var(--text-primary)",
+                              "border-left": line.line_type === "add" ? "3px solid var(--status-running)" :
+                                line.line_type === "remove" ? "3px solid var(--status-error)" : "3px solid transparent",
+                            }}>
+                              <span style={{ color: "var(--text-muted)", "min-width": "35px", display: "inline-block", "user-select": "none" }}>
+                                {line.old_line ?? " "}
+                              </span>
+                              <span style={{ color: "var(--text-muted)", "min-width": "35px", display: "inline-block", "user-select": "none" }}>
+                                {line.new_line ?? " "}
+                              </span>
+                              {line.line_type === "add" ? "+" : line.line_type === "remove" ? "-" : " "} {line.content}
+                            </div>
+                          )}
+                        </For>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </Show>
+
+              <Show when={!diffData() && !diffLoading()}>
+                <div style={{ color: "var(--text-secondary)", "font-size": "12px", "text-align": "center", padding: "30px" }}>
+                  Select another {resource()?.kind} to compare YAML differences
+                </div>
               </Show>
             </div>
           </Show>

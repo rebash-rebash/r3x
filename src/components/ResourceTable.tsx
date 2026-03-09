@@ -9,7 +9,7 @@ import {
   resourceMetrics,
   pvcMetrics,
 } from "../stores/k8s";
-import { getSearchQuery } from "./Header";
+import { searchQuery } from "../stores/k8s";
 
 export default function ResourceTable() {
   const [sortColumn, setSortColumn] = createSignal<string>("");
@@ -30,7 +30,7 @@ export default function ResourceTable() {
   }
 
   const filteredResources = createMemo(() => {
-    const query = getSearchQuery();
+    const query = searchQuery().toLowerCase();
     const all = resources();
     if (!query) return all;
     return all.filter(
@@ -111,7 +111,8 @@ export default function ResourceTable() {
   const isPods = () => activeResourceKind() === "pods";
   const isNodes = () => activeResourceKind() === "nodes";
   const isPvcs = () => activeResourceKind() === "persistentvolumeclaims";
-  const showNamespace = () => !isNodes();
+  const isPvs = () => activeResourceKind() === "persistentvolumes";
+  const showNamespace = () => !isNodes() && !isPvs();
   const showMetrics = () => isPods() || isNodes();
 
   function metricsKey(r: K8sResource): string {
@@ -177,6 +178,43 @@ export default function ResourceTable() {
 
   function pvcKey(r: K8sResource): string {
     return `${r.namespace || "default"}/${r.name}`;
+  }
+
+  // PV helpers (like k9s)
+  function getPvCapacity(r: K8sResource): string {
+    return r.extra?.spec?.capacity?.storage || "-";
+  }
+
+  function getPvAccessModes(r: K8sResource): string {
+    const modes: string[] = r.extra?.spec?.accessModes || [];
+    return modes.map((m: string) =>
+      m === "ReadWriteOnce" ? "RWO" :
+      m === "ReadOnlyMany" ? "ROX" :
+      m === "ReadWriteMany" ? "RWX" :
+      m === "ReadWriteOncePod" ? "RWOP" : m
+    ).join(",") || "-";
+  }
+
+  function getPvReclaimPolicy(r: K8sResource): string {
+    return r.extra?.spec?.persistentVolumeReclaimPolicy || "-";
+  }
+
+  function getPvClaim(r: K8sResource): string {
+    const ref = r.extra?.spec?.claimRef;
+    if (!ref) return "-";
+    return `${ref.namespace || ""}/${ref.name || ""}`;
+  }
+
+  function getPvStorageClass(r: K8sResource): string {
+    return r.extra?.spec?.storageClassName || "-";
+  }
+
+  function getPvVolumeMode(r: K8sResource): string {
+    return r.extra?.spec?.volumeMode || "Filesystem";
+  }
+
+  function getPvReason(r: K8sResource): string {
+    return r.extra?.status?.reason || "-";
   }
 
   function statusClass(status: string | null): string {
@@ -292,6 +330,15 @@ export default function ResourceTable() {
                 <th class="sortable" onClick={() => toggleSort("roles")}>Roles{sortIndicator("roles")}</th>
                 <th class="sortable" onClick={() => toggleSort("version")}>Version{sortIndicator("version")}</th>
               </Show>
+              <Show when={isPvs()}>
+                <th>Capacity</th>
+                <th>Access Modes</th>
+                <th>Reclaim Policy</th>
+                <th>Claim</th>
+                <th>StorageClass</th>
+                <th>Volume Mode</th>
+                <th>Reason</th>
+              </Show>
               <Show when={isPvcs()}>
                 <th>Capacity</th>
                 <th>Used</th>
@@ -398,6 +445,15 @@ export default function ResourceTable() {
                       <td style={{ color: "var(--text-secondary)", "font-size": "11px" }}>
                         {getNodeVersion(resource)}
                       </td>
+                    </Show>
+                    <Show when={isPvs()}>
+                      <td class="metrics-cell">{getPvCapacity(resource)}</td>
+                      <td style={{ "font-size": "11px", color: "var(--text-secondary)" }}>{getPvAccessModes(resource)}</td>
+                      <td style={{ "font-size": "11px", color: "var(--text-secondary)" }}>{getPvReclaimPolicy(resource)}</td>
+                      <td style={{ "font-size": "11px", color: "var(--text-secondary)", "max-width": "200px", overflow: "hidden", "text-overflow": "ellipsis" }}>{getPvClaim(resource)}</td>
+                      <td style={{ "font-size": "11px", color: "var(--text-secondary)" }}>{getPvStorageClass(resource)}</td>
+                      <td style={{ "font-size": "11px", color: "var(--text-secondary)" }}>{getPvVolumeMode(resource)}</td>
+                      <td style={{ "font-size": "11px", color: "var(--text-muted)" }}>{getPvReason(resource)}</td>
                     </Show>
                     <Show when={isPvcs()}>
                       {(() => {

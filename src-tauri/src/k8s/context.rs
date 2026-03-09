@@ -12,11 +12,23 @@ pub struct K8sContext {
     pub is_active: bool,
 }
 
+/// Cached client with creation timestamp for token refresh.
+struct CachedClient {
+    context: String,
+    client: kube::Client,
+    created_at: std::time::Instant,
+}
+
 /// Cached client to avoid re-authenticating on every API call.
-static CLIENT_CACHE: std::sync::OnceLock<Arc<RwLock<Option<(String, kube::Client)>>>> =
+/// Automatically refreshes after 45 minutes to handle cloud provider token expiry
+/// (GKE, EKS, AKS tokens typically expire after ~1 hour).
+static CLIENT_CACHE: std::sync::OnceLock<Arc<RwLock<Option<CachedClient>>>> =
     std::sync::OnceLock::new();
 
-fn cache() -> &'static Arc<RwLock<Option<(String, kube::Client)>>> {
+/// Max age before proactively refreshing the client (45 min).
+const MAX_CLIENT_AGE: std::time::Duration = std::time::Duration::from_secs(45 * 60);
+
+fn cache() -> &'static Arc<RwLock<Option<CachedClient>>> {
     CLIENT_CACHE.get_or_init(|| Arc::new(RwLock::new(None)))
 }
 
@@ -70,27 +82,51 @@ pub async fn switch_context(context_name: String) -> Result<String, String> {
 
     // Store in cache
     let mut guard = cache().write().await;
-    *guard = Some((context_name.clone(), client));
+    *guard = Some(CachedClient {
+        context: context_name.clone(),
+        client,
+        created_at: std::time::Instant::now(),
+    });
 
     Ok(format!("Switched to context: {}", context_name))
 }
 
 /// Get the cached client, or create one if not cached for this context.
+/// Automatically refreshes the client if the cached one is older than 45 minutes,
+/// ensuring cloud provider exec-based tokens (GKE, EKS, AKS) don't expire.
 pub async fn get_client(context_name: &str) -> Result<kube::Client, String> {
     // Check cache first
     {
         let guard = cache().read().await;
-        if let Some((cached_ctx, client)) = guard.as_ref() {
-            if cached_ctx == context_name {
-                return Ok(client.clone());
+        if let Some(cached) = guard.as_ref() {
+            if cached.context == context_name && cached.created_at.elapsed() < MAX_CLIENT_AGE {
+                return Ok(cached.client.clone());
             }
         }
     }
 
-    // Not cached or different context — build and cache
+    // Not cached, different context, or expired — build and cache
     let client = create_client_for_context(context_name).await?;
     let mut guard = cache().write().await;
-    *guard = Some((context_name.to_string(), client.clone()));
+    *guard = Some(CachedClient {
+        context: context_name.to_string(),
+        client: client.clone(),
+        created_at: std::time::Instant::now(),
+    });
+    Ok(client)
+}
+
+/// Force-refresh the client for the given context.
+/// Called when an API call fails with an auth error so the next attempt uses a fresh token.
+#[allow(dead_code)]
+pub async fn refresh_client(context_name: &str) -> Result<kube::Client, String> {
+    let client = create_client_for_context(context_name).await?;
+    let mut guard = cache().write().await;
+    *guard = Some(CachedClient {
+        context: context_name.to_string(),
+        client: client.clone(),
+        created_at: std::time::Instant::now(),
+    });
     Ok(client)
 }
 

@@ -3,7 +3,6 @@ import {
   events,
   eventsLoading,
   showEventsPanel,
-  setShowEventsPanel,
   loadEvents,
 } from "../stores/k8s";
 
@@ -27,10 +26,10 @@ export default function EventsPanel() {
 
   return (
     <Show when={showEventsPanel()}>
-      <div class="events-panel">
-        <div class="detail-header">
+      <div class="view-panel" style={{ overflow: "auto" }}>
+        <div class="view-panel-header">
           <div style={{ display: "flex", "align-items": "center", gap: "12px" }}>
-            <h3>Events</h3>
+            <h2>Events Log</h2>
             <span style={{ "font-size": "11px", color: "var(--text-muted)" }}>
               {filteredEvents().length} events
             </span>
@@ -52,16 +51,11 @@ export default function EventsPanel() {
               onInput={(e) => setFilter(e.currentTarget.value)}
               style={{ "font-size": "12px", padding: "4px 8px", width: "160px" }}
             />
-            <button class="action-btn" onClick={loadEvents}>
-              Refresh
-            </button>
-            <button class="detail-close" onClick={() => setShowEventsPanel(false)}>
-              x
-            </button>
+            <button class="action-btn" onClick={loadEvents}>Refresh</button>
           </div>
         </div>
 
-        <div class="detail-content">
+        <div class="view-panel-content">
           <Show when={eventsLoading()}>
             <div class="loading-overlay">
               <span class="spinner" />

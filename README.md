@@ -20,7 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue" alt="Platform" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License" />
-  <img src="https://img.shields.io/badge/version-0.1.0-orange" alt="Version" />
+  <img src="https://img.shields.io/badge/version-0.2.0-orange" alt="Version" />
   <img src="https://img.shields.io/badge/rust-stable-brightgreen" alt="Rust" />
 </p>
 
@@ -44,11 +44,24 @@ r3x gives you a real GUI with the resource efficiency of a terminal app. No Elec
 
 ## Features
 
+### Cluster Overview Dashboard
+- **Default landing page** — Opens on startup with a full cluster summary
+- **CPU & Memory donut charts** — Visual utilization gauges with color-coded thresholds
+- **Pod status pie chart** — Running, Pending, Failed, Succeeded breakdown at a glance
+- **Workload summary cards** — Deployments, StatefulSets, DaemonSets, Jobs with ready/not-ready counts
+- **Per-node utilization table** — CPU and memory bars for every node in the cluster
+- **Recent warnings** — Latest warning events surfaced immediately
+
+### Live Cluster Health Bar
+- **Always-visible status bar** — CPU and memory utilization displayed in the header at all times
+- **Color-coded thresholds** — Green (<70%), amber (70-90%), red (>90%)
+- **Node and pod counts** — Quick cluster size indicator
+
 ### Resource Management
 - **15 resource types** — Pods, Deployments, Services, StatefulSets, DaemonSets, ReplicaSets, Jobs, CronJobs, ConfigMaps, Secrets, Ingresses, NetworkPolicies, ServiceAccounts, PVCs, Nodes
 - **Custom Resources (CRDs)** — Auto-discovers and browses any CRD in your cluster
-- **Multi-cluster** — Switch between kubeconfig contexts instantly
-- **Namespace filtering** — Browse all namespaces or focus on one
+- **Multi-cluster** — Switch between kubeconfig contexts instantly with cluster name and user info displayed
+- **Namespace filtering** — Browse all namespaces or pin favorites for quick access
 - **Label filtering** — Filter resources by Kubernetes label selectors (e.g., `app=nginx,env=prod`)
 - **Auto-refresh** — Configurable polling interval to keep resources up to date
 - **Sorting & search** — Column sorting, full-text search across all visible fields
@@ -62,14 +75,20 @@ r3x gives you a real GUI with the resource efficiency of a terminal app. No Elec
 
 ### Operations
 - **Scale deployments** — Scale replicas up/down directly from the UI
-- **Port forwarding** — Forward local ports to pods/services
+- **Rollout restart** — Trigger rolling restarts on Deployments, StatefulSets, DaemonSets
+- **Port forwarding** — Forward local ports to pods/services with active session management
 - **Delete resources** — Remove resources with confirmation
+- **Apply YAML** — Edit and apply resource YAML directly
+- **CronJob triggers** — Manually trigger CronJobs on demand
 
 ### Cluster Views
-- **Cluster Dashboard** — Node count, pod count, CPU/memory utilization with per-node breakdown
-- **Topology graph** — Visual tree of Controllers → ReplicaSets → Pods → Containers
+- **Cluster Dashboard** — CPU/memory donut charts, pod status pie, workload cards, node table, warning events
+- **Topology graph** — Visual tree of Controllers → ReplicaSets → Pods → Containers with status indicators
 - **Helm releases** — View all Helm releases with status, chart version, and revision history
-- **RBAC viewer** — Inspect ClusterRoleBindings and RoleBindings with subject details
+- **RBAC viewer** — Inspect ClusterRoleBindings and RoleBindings with subject details and search
+- **Network Policies** — Policy list with selector matching, rule details, and unprotected pod detection
+- **Events log** — Cluster-wide event stream with filtering by type, reason, and object
+- **Health Score** — Cluster health analysis with scoring and actionable recommendations
 
 ### Security
 - **Security scanner** — Detects misconfigurations across your workloads:
@@ -85,10 +104,14 @@ r3x gives you a real GUI with the resource efficiency of a terminal app. No Elec
   - Writable root filesystem
 - **Security score** — 0-100 score with severity breakdown (Critical / High / Medium / Low)
 - **Filterable findings** — Filter by severity, category, or search
+- **Image scanning** — Detect image vulnerabilities and outdated base images
 
 ### Resource Benchmarking
 - **CPU & memory recommendations** — Analyzes actual usage metrics and recommends right-sized requests and limits
 - **Percentile-based** — Uses P50 for requests, P99 for limits, with safety margins
+
+### Cost Estimation
+- **Resource cost analysis** — Estimates monthly cost based on CPU and memory allocation
 
 ### Command Palette
 - **k9s-style command mode** — Press `:` to open, type commands like:
@@ -100,6 +123,10 @@ r3x gives you a real GUI with the resource efficiency of a terminal app. No Elec
 ### Quality of Life
 - **Dark / Light theme** — Toggle with `t`
 - **Keyboard-first navigation** — Full keyboard control, mouse optional
+- **System tray** — Runs in background for instant access; click tray icon to restore
+- **Favorite namespaces** — Pin frequently used namespaces for quick switching
+- **Alerts bell** — Critical alerts indicator with warning count badge
+- **Two-row header** — Context, namespace, cluster info on row 1; breadcrumb, filters, search on row 2
 - **Tiny footprint** — ~17MB app bundle, ~30MB RAM at runtime
 
 ---
@@ -131,12 +158,22 @@ git clone https://github.com/rebash-rebash/r3x.git
 cd r3x
 npm install
 cargo tauri build
-# Installer at: src-tauri\target\release\bundle\nsis\r3x_0.1.0_x64-setup.exe
+# Installer at: src-tauri\target\release\bundle\nsis\r3x_0.2.0_x64-setup.exe
 ```
 
 ### Linux
 
 Download the latest `.AppImage` or `.deb` from [Releases](https://github.com/rebash-rebash/r3x/releases).
+
+Or build from source:
+
+```bash
+git clone https://github.com/rebash-rebash/r3x.git
+cd r3x
+npm install
+cargo tauri build
+# Output at: src-tauri/target/release/bundle/deb/*.deb
+```
 
 ---
 
@@ -146,7 +183,7 @@ r3x reads your local kubeconfig (`~/.kube/config`). Make sure:
 
 1. **kubectl** is configured and can reach your cluster
 2. **Helm** (optional) — required for Helm releases view (`helm` must be in PATH)
-3. **Metrics Server** (optional) — required for CPU/memory metrics and benchmarking
+3. **Metrics Server** (optional) — required for CPU/memory metrics, dashboard charts, and benchmarking
 
 ---
 
@@ -185,7 +222,7 @@ xcode-select --install
 
 #### Linux (Debian/Ubuntu)
 ```bash
-sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 ```
 
 ### Build
@@ -219,22 +256,28 @@ r3x/
 ├── src/                    # Frontend (SolidJS + TypeScript)
 │   ├── components/         # UI components
 │   │   ├── Sidebar.tsx         # Resource kind navigation
-│   │   ├── Header.tsx          # Context/namespace switcher, search, filters
+│   │   ├── Header.tsx          # Context/namespace switcher, health bar, search
 │   │   ├── ResourceTable.tsx   # Main resource list with sorting
 │   │   ├── DetailPanel.tsx     # YAML, logs, exec, events, metrics
 │   │   ├── CommandPalette.tsx  # k9s-style command mode
-│   │   ├── ClusterDashboard.tsx# Cluster metrics overview
+│   │   ├── ClusterDashboard.tsx# Cluster overview with donut charts
 │   │   ├── TopologyPanel.tsx   # Workload topology tree
 │   │   ├── SecurityPanel.tsx   # Security scan results
 │   │   ├── HelmPanel.tsx       # Helm releases viewer
 │   │   ├── RbacPanel.tsx       # RBAC bindings viewer
+│   │   ├── HealthPanel.tsx     # Cluster health scoring
+│   │   ├── NetpolPanel.tsx     # Network policy viewer
+│   │   ├── EventsPanel.tsx     # Cluster events log
+│   │   ├── AlertsBell.tsx      # Critical alerts indicator
 │   │   └── Terminal.tsx        # xterm.js pod exec
 │   ├── stores/
-│   │   └── k8s.ts              # Central state (signals + Tauri IPC)
+│   │   ├── k8s.ts              # Central state (signals + Tauri IPC)
+│   │   └── theme.ts            # Dark/light theme state
 │   └── styles/
-│       └── global.css          # All styles (~32KB)
+│       └── global.css          # All styles (~40KB)
 ├── src-tauri/              # Backend (Rust)
 │   └── src/
+│       ├── lib.rs              # Tauri app setup, system tray, window management
 │       └── k8s/
 │           ├── resources.rs    # Resource listing (15 types + CRDs)
 │           ├── context.rs      # Kubeconfig context management
@@ -243,14 +286,25 @@ r3x/
 │           ├── security.rs     # Security misconfiguration scanner
 │           ├── topology.rs     # Workload topology builder
 │           ├── metrics.rs      # Cluster metrics aggregation
+│           ├── summary.rs      # Cluster overview data
+│           ├── health.rs       # Cluster health scoring
 │           ├── benchmark.rs    # Resource recommendation engine
+│           ├── cost.rs         # Cost estimation
 │           ├── helm.rs         # Helm CLI integration
 │           ├── rbac.rs         # RBAC binding queries
+│           ├── netpol.rs       # Network policy analysis
 │           ├── events.rs       # Kubernetes events
-│           ├── nodes.rs        # Node details
+│           ├── nodes.rs        # Node details, cordon/drain
 │           ├── portforward.rs  # Port forwarding
-│           ├── scale.rs        # Deployment scaling
-│           └── crds.rs         # CRD discovery
+│           ├── scale.rs        # Deployment scaling, rollout restart
+│           ├── images.rs       # Image scanning
+│           ├── hpa.rs          # Horizontal Pod Autoscaler
+│           ├── diff.rs         # Resource diff
+│           ├── discovery.rs    # API resource discovery
+│           ├── crds.rs         # CRD discovery
+│           ├── cronjob.rs      # CronJob management
+│           ├── restarts.rs     # Restart history tracking
+│           └── traffic.rs      # Traffic distribution
 └── package.json
 ```
 
