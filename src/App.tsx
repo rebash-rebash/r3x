@@ -1,8 +1,10 @@
 import { onMount, onCleanup, Show } from "solid-js";
 import {
   initialize,
+  reconnectToCluster,
   loadResources,
   error,
+  setError,
   setSelectedResource,
   RESOURCE_KINDS,
   setActiveResourceKind,
@@ -111,10 +113,24 @@ function App() {
         <Header />
 
         <Show when={error()}>
-          <div class="error-banner">
-            <span>⚠</span>
-            {error()}
-            <button onClick={() => window.location.reload()}>×</button>
+          <div class="error-panel">
+            <div class="error-panel-header">
+              <span class="error-panel-icon">!</span>
+              <span class="error-panel-title">
+                {error()!.split("\n")[0]}
+              </span>
+              <div class="error-panel-actions">
+                <button class="error-retry-btn" onClick={() => { setError(null); reconnectToCluster(); }}>
+                  Retry Connection
+                </button>
+                <button class="error-dismiss-btn" onClick={() => setError(null)}>
+                  Dismiss
+                </button>
+              </div>
+            </div>
+            <Show when={error()!.includes("\n")}>
+              <pre class="error-panel-details">{error()!.split("\n").slice(1).join("\n").trim()}</pre>
+            </Show>
           </div>
         </Show>
 

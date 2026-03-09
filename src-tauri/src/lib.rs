@@ -5,7 +5,7 @@ use tauri::menu::{MenuBuilder, MenuItemBuilder};
 use tauri::Manager;
 
 use k8s::benchmark::benchmark_pod;
-use k8s::context::{get_current_context, list_contexts, switch_context};
+use k8s::context::{get_current_context, list_contexts, reconnect, switch_context};
 use k8s::cost::estimate_cost;
 use k8s::cronjob::{get_cronjob_detail, trigger_cronjob};
 use k8s::diff::{diff_resources, diff_yaml};
@@ -33,24 +33,94 @@ use k8s::traffic::get_traffic_distribution;
 
 /// Ensure exec-based auth plugins (gke-gcloud-auth-plugin, aws-iam-authenticator, etc.)
 /// are discoverable by inheriting the user's shell PATH.
-fn inherit_shell_path() {
+pub fn inherit_shell_path() {
     #[cfg(not(target_os = "windows"))]
     {
-        // Try the user's default shell, falling back through common shells
+        // Try the user's default shell first, then common shells.
+        // Use -l (login) without -i (interactive) to avoid prompts/hangs.
         let shells = ["zsh", "bash", "sh"];
+        let mut resolved = false;
         for shell in &shells {
             if let Ok(output) = std::process::Command::new(shell)
-                .args(["-li", "-c", "echo $PATH"])
+                .args(["-l", "-c", "echo $PATH"])
+                .env("TERM", "dumb")
                 .output()
             {
-                if let Ok(path) = String::from_utf8(output.stdout) {
-                    let path = path.trim();
-                    if !path.is_empty() {
-                        std::env::set_var("PATH", path);
-                        return;
+                if output.status.success() {
+                    if let Ok(path) = String::from_utf8(output.stdout) {
+                        let path = path.trim();
+                        if !path.is_empty() && path.contains('/') {
+                            std::env::set_var("PATH", path);
+                            resolved = true;
+                            break;
+                        }
                     }
                 }
             }
+        }
+
+        // Append well-known cloud SDK / tool paths as fallback
+        if let Ok(current_path) = std::env::var("PATH") {
+            let home = std::env::var("HOME").unwrap_or_else(|_| "/Users/unknown".to_string());
+            let mut extra_paths = vec![
+                format!("{}/google-cloud-sdk/bin", home),
+                format!("{}/Downloads/google-cloud-sdk/bin", home),
+                format!("{}/Desktop/google-cloud-sdk/bin", home),
+                format!("{}/.config/gcloud/bin", home),
+                "/usr/local/bin".to_string(),
+                "/opt/homebrew/bin".to_string(),
+                "/opt/homebrew/sbin".to_string(),
+                "/usr/local/google-cloud-sdk/bin".to_string(),
+                "/snap/google-cloud-cli/current/bin".to_string(),
+                format!("{}/.local/bin", home),
+                format!("{}/.cargo/bin", home),
+                "/usr/local/sbin".to_string(),
+            ];
+
+            // Dynamically find gcloud SDK path by asking gcloud itself
+            if let Ok(output) = std::process::Command::new("gcloud")
+                .args(["info", "--format=value(installation.sdk_root)"])
+                .output()
+            {
+                if let Ok(sdk_root) = String::from_utf8(output.stdout) {
+                    let sdk_bin = format!("{}/bin", sdk_root.trim());
+                    if !sdk_bin.is_empty() && sdk_root.trim().contains('/') {
+                        extra_paths.insert(0, sdk_bin);
+                    }
+                }
+            }
+
+            // Also locate specific auth plugins directly via `which` in inherited PATH
+            for plugin in &["gke-gcloud-auth-plugin", "aws-iam-authenticator", "kubelogin"] {
+                if let Ok(output) = std::process::Command::new("which")
+                    .arg(plugin)
+                    .output()
+                {
+                    if let Ok(path_str) = String::from_utf8(output.stdout) {
+                        if let Some(parent) = std::path::Path::new(path_str.trim()).parent() {
+                            let dir = parent.to_string_lossy().to_string();
+                            if !dir.is_empty() && !extra_paths.contains(&dir) {
+                                extra_paths.insert(0, dir);
+                            }
+                        }
+                    }
+                }
+            }
+
+            let mut path = current_path.clone();
+            for extra in &extra_paths {
+                if std::path::Path::new(extra).exists() && !current_path.contains(extra.as_str()) {
+                    path.push(':');
+                    path.push_str(extra);
+                }
+            }
+            if path != current_path {
+                std::env::set_var("PATH", &path);
+            }
+        }
+
+        if !resolved {
+            eprintln!("[r3x] Warning: Could not inherit shell PATH. Cloud auth plugins may not be found.");
         }
     }
 
@@ -121,6 +191,7 @@ pub fn run() {
             list_contexts,
             get_current_context,
             switch_context,
+            reconnect,
             list_namespaces,
             list_resources,
             get_resource_yaml,

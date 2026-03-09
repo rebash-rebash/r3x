@@ -775,6 +775,96 @@ body {
   margin-left: auto;
 }
 
+/* Connection error panel with diagnostic steps */
+.error-panel {
+  margin: 12px;
+  background: color-mix(in srgb, var(--danger) 8%, var(--bg-secondary));
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.error-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid color-mix(in srgb, var(--danger) 20%, transparent);
+}
+
+.error-panel-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--danger);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.error-panel-title {
+  color: var(--danger);
+  font-size: 13px;
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+}
+
+.error-panel-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.error-retry-btn {
+  background: var(--danger);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 4px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.error-retry-btn:hover {
+  opacity: 0.85;
+}
+
+.error-dismiss-btn {
+  background: none;
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.error-dismiss-btn:hover {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.error-panel-details {
+  padding: 12px 14px;
+  margin: 0;
+  font-family: var(--font-mono, 'SF Mono', 'Menlo', 'Consolas', monospace);
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+}
+
 /* Empty state */
 .empty-state {
   display: flex;

@@ -81,6 +81,7 @@ export {
   selectedResource,
   loading,
   error,
+  setError,
   connected,
   setActiveNamespace,
   setActiveResourceKind,
@@ -125,6 +126,39 @@ export async function initialize() {
   }
 }
 
+/// Force-reconnect to the current cluster. Clears cached tokens, re-inherits PATH,
+/// and rebuilds the kube client from scratch. Use after re-authenticating (gcloud auth login, etc.)
+export async function reconnectToCluster() {
+  try {
+    setLoading(true);
+    setError(null);
+    setConnected(false);
+
+    const ctxs = await invoke<K8sContext[]>("list_contexts");
+    setContexts(ctxs);
+
+    const ctx = activeContext() || ctxs.find((c) => c.is_active)?.name;
+    if (!ctx) {
+      setError("No active context found in kubeconfig");
+      return;
+    }
+    setActiveContext(ctx);
+
+    // Use 'reconnect' command which re-inherits PATH and forces fresh client
+    await invoke<string>("reconnect", { contextName: ctx });
+    setConnected(true);
+
+    await Promise.all([loadNamespaces(), loadResources(), loadCrds()]);
+    loadApiResources();
+    startAlertPolling();
+    loadClusterOverview();
+  } catch (e: any) {
+    setError(e.toString());
+  } finally {
+    setLoading(false);
+  }
+}
+
 export async function loadApiResources() {
   try {
     const ctx = activeContext();
@@ -150,6 +184,7 @@ export async function switchContext(contextName: string) {
     await Promise.all([loadNamespaces(), loadResources(), loadCrds()]);
     loadApiResources();
     startAlertPolling();
+    loadClusterOverview();
   } catch (e: any) {
     setError(e.toString());
   } finally {
@@ -228,6 +263,7 @@ export async function loadResources() {
     const ctx = activeContext();
     if (!ctx) return;
     const kind = activeResourceKind();
+    if (!kind) return;
     const ns = activeNamespace();
     const lf = labelFilter();
     const res = await invoke<K8sResource[]>("list_resources", {
