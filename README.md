@@ -137,6 +137,12 @@ r3x gives you a real GUI with the resource efficiency of a terminal app. No Elec
 
 Download the latest `.dmg` from [Releases](https://github.com/rebash-rebash/r3x/releases), open it, and drag **r3x** to your Applications folder.
 
+> **Note:** If macOS says "r3x is damaged and can't be opened", run:
+> ```bash
+> xattr -cr /Applications/r3x.app
+> ```
+> This removes the quarantine flag that macOS applies to unsigned apps.
+
 Or build from source:
 
 ```bash
