@@ -18,6 +18,7 @@ pub mod netpol;
 pub mod nodes;
 pub mod portforward;
 pub mod rbac;
+pub mod rbac_audit;
 pub mod resources;
 pub mod restarts;
 pub mod scale;

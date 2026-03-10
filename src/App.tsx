@@ -14,6 +14,7 @@ import {
   showDashboard,
   showTopologyPanel,
   showSecurityPanel,
+  showRbacAuditPanel,
   showEventsPanel,
   showHealthPanel,
 } from "./stores/k8s";
@@ -23,6 +24,7 @@ import Header from "./components/Header";
 import ResourceTable from "./components/ResourceTable";
 import DetailPanel from "./components/DetailPanel";
 import SecurityPanel from "./components/SecurityPanel";
+import RbacAuditPanel from "./components/RbacAuditPanel";
 import TopologyPanel from "./components/TopologyPanel";
 import ClusterDashboard from "./components/ClusterDashboard";
 import CommandPalette, { setShowCommand } from "./components/CommandPalette";
@@ -151,6 +153,9 @@ function App() {
         <Show when={showSecurityPanel()}>
           <SecurityPanel />
         </Show>
+        <Show when={showRbacAuditPanel()}>
+          <RbacAuditPanel />
+        </Show>
         <Show when={showTopologyPanel()}>
           <TopologyPanel />
         </Show>
@@ -163,7 +168,7 @@ function App() {
         <Show when={showHelpPanel()}>
           <HelpPanel />
         </Show>
-        <Show when={!showDashboard() && !showHelmPanel() && !showRbacPanel() && !showTopologyPanel() && !showSecurityPanel() && !showEventsPanel() && !showHealthPanel() && !showNetpolPanel() && !showHelpPanel()}>
+        <Show when={!showDashboard() && !showHelmPanel() && !showRbacPanel() && !showTopologyPanel() && !showSecurityPanel() && !showRbacAuditPanel() && !showEventsPanel() && !showHealthPanel() && !showNetpolPanel() && !showHelpPanel()}>
           <ResourceTable />
           <DetailPanel />
         </Show>

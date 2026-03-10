@@ -737,6 +737,64 @@ export async function runSecurityScan() {
   }
 }
 
+// RBAC Audit
+export interface RbacAuditFinding {
+  severity: string;
+  category: string;
+  title: string;
+  description: string;
+  binding_name: string;
+  binding_kind: string;
+  role_name: string;
+  subjects: string[];
+  namespace: string | null;
+  remediation: string;
+}
+
+export interface RbacAuditSummary {
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+  total_roles_scanned: number;
+  total_bindings_scanned: number;
+  score: number;
+}
+
+export interface RbacAuditResult {
+  findings: RbacAuditFinding[];
+  summary: RbacAuditSummary;
+}
+
+const [rbacAuditResults, setRbacAuditResults] = createSignal<RbacAuditResult | null>(null);
+const [rbacAuditRunning, setRbacAuditRunning] = createSignal(false);
+const [showRbacAuditPanel, setShowRbacAuditPanel] = createSignal(false);
+
+export {
+  rbacAuditResults,
+  rbacAuditRunning,
+  showRbacAuditPanel,
+  setShowRbacAuditPanel,
+};
+
+export async function runRbacAudit() {
+  try {
+    setRbacAuditRunning(true);
+    const ctx = activeContext();
+    if (!ctx) return;
+    const result = await invoke<RbacAuditResult>("audit_rbac", {
+      context: ctx,
+      namespace: activeNamespace(),
+    });
+    setRbacAuditResults(result);
+    setShowRbacAuditPanel(true);
+  } catch (e: any) {
+    setError(e.toString());
+  } finally {
+    setRbacAuditRunning(false);
+  }
+}
+
 // Topology
 export interface TopoNode {
   id: string;
@@ -1970,6 +2028,7 @@ export function closeAllViewPanels() {
   setShowNetpolPanel(false);
   setShowEventsPanel(false);
   setShowSecurityPanel(false);
+  setShowRbacAuditPanel(false);
   setShowHelpPanel(false);
   setActiveResourceKind("");
 }

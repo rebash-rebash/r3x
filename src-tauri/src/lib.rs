@@ -23,6 +23,7 @@ use k8s::logs::{get_pod_containers, get_pod_logs, get_workload_logs, stream_pod_
 use k8s::nodes::{cordon_node, drain_node, get_node_details, uncordon_node};
 use k8s::portforward::{get_pod_ports, list_port_forwards, start_port_forward, stop_port_forward};
 use k8s::rbac::list_rbac_bindings;
+use k8s::rbac_audit::audit_rbac;
 use k8s::restarts::get_restart_history;
 use k8s::resources::{apply_resource_yaml, delete_resource, get_dynamic_resource_yaml, get_resource_pods, get_resource_yaml, list_namespaces, list_resources};
 use k8s::scale::{scale_resource, rollout_restart};
@@ -227,6 +228,7 @@ pub fn run() {
             benchmark_pod,
             list_helm_releases,
             list_rbac_bindings,
+            audit_rbac,
             discover_api_resources,
             list_dynamic_resources,
             watch_events,

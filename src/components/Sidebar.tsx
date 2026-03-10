@@ -21,6 +21,9 @@ import {
   loadRbac,
   rbacLoading,
   showRbacPanel,
+  runRbacAudit,
+  rbacAuditRunning,
+  showRbacAuditPanel,
   loadClusterHealth,
   healthLoading,
   showHealthPanel,
@@ -90,7 +93,7 @@ export default function Sidebar() {
       <div class="sidebar-header">
         <h1>r3x</h1>
         <span class="badge">rebash</span>
-        <span class="version-label">v0.2.1</span>
+        <span class="version-label">v0.3.1</span>
       </div>
 
       <div class="sidebar-section">
@@ -332,6 +335,18 @@ export default function Sidebar() {
           >
             <span class="icon">S</span>
             {securityScanning() ? "Scanning..." : "Security Scan"}
+          </button>
+          <button
+            class={`sidebar-item ${showRbacAuditPanel() ? "active" : ""}`}
+            onClick={() => {
+              if (showRbacAuditPanel()) { closeAllViewPanels(); return; }
+              closeAllViewPanels();
+              runRbacAudit();
+            }}
+            disabled={rbacAuditRunning()}
+          >
+            <span class="icon">A</span>
+            {rbacAuditRunning() ? "Auditing..." : "RBAC Audit"}
           </button>
         </Show>
       </div>
