@@ -57,6 +57,148 @@ export interface ApiResourceInfo {
   verbs: string[];
 }
 
+// Resource cache: avoid re-fetching when switching between resource kinds
+const resourceCache: Record<string, { data: K8sResource[]; ts: number }> = {};
+const CACHE_FRESH = 30000; // 30s = don't re-fetch at all
+const CACHE_STALE = 300000; // 5min = show cached + refresh in background
+
+function getCacheKey(ctx: string, ns: string, kind: string) {
+  return `${ctx}|${ns}|${kind}`;
+}
+
+// ─── Kubernetes Informer / Watcher ───────────────────────────────────────────
+// Tracks which resource kinds have active watchers (live data via LIST+WATCH).
+// When a watcher is active, resource data is pushed from the backend via events,
+// eliminating polling and providing instant updates.
+
+interface WatcherUpdate {
+  kind_key: string;
+  resources: K8sResource[];
+}
+
+const [watchedKinds, setWatchedKinds] = createSignal<Set<string>>(new Set());
+let watcherUnlisten: UnlistenFn | null = null;
+
+// Default kinds to auto-watch on startup for instant data
+const DEFAULT_WATCH_KINDS = ["pods", "deployments", "services"];
+
+export { watchedKinds };
+
+export function isKindWatched(kind: string): boolean {
+  return watchedKinds().has(kind);
+}
+
+/** Start a live watcher for a resource kind. Returns true if newly started. */
+export async function startResourceWatcher(kind: string): Promise<boolean> {
+  const ctx = activeContext();
+  if (!ctx) return false;
+  // Skip CRD and dynamic resource kinds — watchers only support built-in types
+  if (kind.startsWith("crd:") || kind.startsWith("api:") || !kind) return false;
+  if (watchedKinds().has(kind)) return false;
+
+  try {
+    const started = await invoke<boolean>("start_watcher", {
+      context: ctx,
+      kind,
+    });
+    if (started) {
+      setWatchedKinds((prev) => new Set([...prev, kind]));
+    }
+    return started;
+  } catch (e: any) {
+    console.warn(`[r3x] Failed to start watcher for '${kind}':`, e);
+    return false;
+  }
+}
+
+/** Stop all active watchers (e.g., on context switch). */
+export async function stopAllResourceWatchers() {
+  try {
+    await invoke("stop_all_watchers");
+  } catch {
+    // ignore
+  }
+  setWatchedKinds(new Set<string>());
+}
+
+/** Shallow-compare two resource arrays — only compare identity + status (not age). */
+function resourcesEqual(a: K8sResource[], b: K8sResource[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (
+      a[i].name !== b[i].name ||
+      a[i].namespace !== b[i].namespace ||
+      a[i].status !== b[i].status
+    )
+      return false;
+  }
+  return true;
+}
+
+// Throttle: track last UI update time per kind to avoid rapid re-renders
+const lastWatcherUIUpdate: Record<string, number> = {};
+const WATCHER_UI_THROTTLE_MS = 1000; // max 1 UI update per second per kind
+
+/** Set up the global listener for watcher-update events from the backend. */
+async function setupWatcherListener() {
+  if (watcherUnlisten) return; // already listening
+
+  watcherUnlisten = await listen<WatcherUpdate>("watcher-update", (event) => {
+    const { kind_key, resources: allResources } = event.payload;
+    const currentKind = activeResourceKind();
+
+    // Filter by active namespace (watchers watch all namespaces)
+    const ns = activeNamespace();
+    const filtered =
+      ns === "_all"
+        ? allResources
+        : allResources.filter((r) => r.namespace === ns);
+
+    // Always update cache (cheap, no UI impact)
+    const ctx = activeContext();
+    if (ctx) {
+      const cacheKey = getCacheKey(ctx, ns, kind_key);
+      resourceCache[cacheKey] = { data: filtered, ts: Date.now() };
+    }
+
+    // Only update the UI if this watcher matches the currently viewed resource kind
+    if (kind_key !== currentKind) return;
+
+    // Throttle UI updates: max once per second per kind
+    const now = Date.now();
+    const lastUpdate = lastWatcherUIUpdate[kind_key] || 0;
+    if (now - lastUpdate < WATCHER_UI_THROTTLE_MS) return;
+
+    // Skip update if resources haven't actually changed (prevents flicker)
+    const current = resources();
+    if (resourcesEqual(current, filtered)) return;
+
+    lastWatcherUIUpdate[kind_key] = now;
+    setResources(filtered);
+
+    // Keep selected resource in sync — only if data actually changed
+    const selected = selectedResource();
+    if (selected) {
+      const fresh = filtered.find(
+        (r) =>
+          r.name === selected.name &&
+          r.namespace === selected.namespace &&
+          r.kind === selected.kind
+      );
+      if (fresh && fresh.status !== selected.status) {
+        setSelectedResource({ ...fresh });
+      }
+    }
+  });
+}
+
+/** Start default watchers after connecting to a cluster. */
+async function startDefaultWatchers() {
+  for (const kind of DEFAULT_WATCH_KINDS) {
+    startResourceWatcher(kind); // fire-and-forget, non-blocking
+  }
+}
+
 // Global state
 const [contexts, setContexts] = createSignal<K8sContext[]>([]);
 const [activeContext, setActiveContext] = createSignal<string>("");
@@ -119,6 +261,11 @@ export async function initialize() {
     startAlertPolling();
     // 6. Load dashboard overview in background
     loadClusterOverview();
+    // 7. Pre-fetch common resource types in background for instant switching
+    prefetchResources();
+    // 8. Set up live watchers for instant data updates
+    setupWatcherListener();
+    startDefaultWatchers();
   } catch (e: any) {
     setError(e.toString());
   } finally {
@@ -145,6 +292,7 @@ export async function reconnectToCluster() {
     setActiveContext(ctx);
 
     // Use 'reconnect' command which re-inherits PATH and forces fresh client
+    await stopAllResourceWatchers();
     await invoke<string>("reconnect", { contextName: ctx });
     setConnected(true);
 
@@ -152,6 +300,7 @@ export async function reconnectToCluster() {
     loadApiResources();
     startAlertPolling();
     loadClusterOverview();
+    startDefaultWatchers();
   } catch (e: any) {
     setError(e.toString());
   } finally {
@@ -177,6 +326,9 @@ export async function switchContext(contextName: string) {
     setLoading(true);
     setError(null);
     setConnected(false);
+    // Stop all live watchers and clear cache
+    await stopAllResourceWatchers();
+    for (const key in resourceCache) delete resourceCache[key];
     await invoke<string>("switch_context", { contextName });
     setActiveContext(contextName);
     setConnected(true);
@@ -185,6 +337,7 @@ export async function switchContext(contextName: string) {
     loadApiResources();
     startAlertPolling();
     loadClusterOverview();
+    startDefaultWatchers();
   } catch (e: any) {
     setError(e.toString());
   } finally {
@@ -221,7 +374,59 @@ const [resourceMetrics, setResourceMetrics] = createSignal<Record<string, Inline
 const [pvcMetrics, setPvcMetrics] = createSignal<Record<string, PvcMetricsInfo>>({});
 export { resourceMetrics, pvcMetrics };
 
-export async function loadResources() {
+/** Fetch inline metrics (CPU/mem) for the current resource kind in background. */
+function loadInlineMetrics(ctx: string, ns: string, kind: string) {
+  if (kind === "pods") {
+    invoke<PodMetricsInfo[]>("get_pod_metrics", { context: ctx, namespace: ns })
+      .then((metrics) => {
+        const map: Record<string, InlineMetrics> = {};
+        for (const m of metrics) {
+          map[`${m.namespace}/${m.name}`] = {
+            cpu: m.cpu_total,
+            memory: m.memory_total,
+            cpu_percent: m.cpu_percent ?? undefined,
+            memory_percent: m.memory_percent ?? undefined,
+            cpu_limit_percent: m.cpu_limit_percent ?? undefined,
+            memory_limit_percent: m.memory_limit_percent ?? undefined,
+            cpu_request: m.cpu_request ?? undefined,
+            memory_request: m.memory_request ?? undefined,
+            cpu_limit: m.cpu_limit ?? undefined,
+            memory_limit: m.memory_limit ?? undefined,
+          };
+        }
+        setResourceMetrics(map);
+      })
+      .catch(() => {});
+  } else if (kind === "nodes") {
+    invoke<NodeMetricsInfo[]>("get_node_metrics", { context: ctx })
+      .then((metrics) => {
+        const map: Record<string, InlineMetrics> = {};
+        for (const m of metrics) {
+          map[m.name] = {
+            cpu: m.cpu,
+            memory: m.memory,
+            cpu_percent: m.cpu_percent,
+            memory_percent: m.memory_percent,
+          };
+        }
+        setResourceMetrics(map);
+      })
+      .catch(() => {});
+  } else if (kind === "persistentvolumeclaims") {
+    setPvcMetrics({});
+    invoke<PvcMetricsInfo[]>("get_pvc_metrics", { context: ctx, namespace: ns })
+      .then((metrics) => {
+        const map: Record<string, PvcMetricsInfo> = {};
+        for (const m of metrics) {
+          map[`${m.namespace}/${m.name}`] = m;
+        }
+        setPvcMetrics(map);
+      })
+      .catch(() => {});
+  }
+}
+
+export async function loadResources(silent = false) {
   try {
     // If currently viewing a CRD, reload via custom resources
     const crd = activeCrd();
@@ -233,9 +438,11 @@ export async function loadResources() {
     // If viewing a dynamically discovered resource, use list_dynamic_resources
     const dynRes = activeApiResource();
     if (dynRes && activeResourceKind().startsWith("api:")) {
-      setLoading(true);
+      if (!silent) {
+        setLoading(true);
+        setResourceMetrics({});
+      }
       setError(null);
-      setResourceMetrics({});
       const ctx = activeContext();
       if (!ctx) return;
       const ns = activeNamespace();
@@ -255,17 +462,66 @@ export async function loadResources() {
       return;
     }
 
-    setLoading(true);
+    if (!silent) {
+      setActiveCrd(null);
+      setActiveApiResource(null);
+    }
     setError(null);
-    setResourceMetrics({});
-    setActiveCrd(null);
-    setActiveApiResource(null);
     const ctx = activeContext();
     if (!ctx) return;
     const kind = activeResourceKind();
     if (!kind) return;
     const ns = activeNamespace();
     const lf = labelFilter();
+    const cacheKey = getCacheKey(ctx, ns, kind);
+
+    // ── Fast path: read from live watcher cache (instant, 0ms) ──
+    if (watchedKinds().has(kind) && !lf) {
+      try {
+        const watched = await invoke<K8sResource[] | null>("get_watched_resources", { kind });
+        if (watched) {
+          const filtered = ns === "_all" ? watched : watched.filter((r) => r.namespace === ns);
+          setResources(filtered);
+          resourceCache[cacheKey] = { data: filtered, ts: Date.now() };
+          // Update selected resource
+          const selected = selectedResource();
+          if (selected) {
+            const fresh = filtered.find(
+              (r) => r.name === selected.name && r.namespace === selected.namespace && r.kind === selected.kind
+            );
+            if (fresh) setSelectedResource({ ...fresh });
+          }
+          setLoading(false);
+          // Start watcher for this kind if not already (ensures it stays live)
+          startResourceWatcher(kind);
+          // Still fetch metrics in background
+          loadInlineMetrics(ctx, ns, kind);
+          return;
+        }
+      } catch {
+        // Fall through to normal API call
+      }
+    }
+
+    const cached = resourceCache[cacheKey];
+    const age = cached ? Date.now() - cached.ts : Infinity;
+
+    // Always show cached data instantly if available (any age)
+    if (cached) {
+      setResources(cached.data);
+      // If cache is fresh enough, skip the API call entirely
+      if (age < CACHE_FRESH && !silent) {
+        setLoading(false);
+        return;
+      }
+    }
+
+    // Only show loading spinner if we have NO cached data
+    if (!silent && !cached) {
+      setLoading(true);
+      setResourceMetrics({});
+    }
+
     const res = await invoke<K8sResource[]>("list_resources", {
       context: ctx,
       namespace: ns,
@@ -273,60 +529,51 @@ export async function loadResources() {
       labelSelector: lf || null,
     });
     setResources(res);
+    resourceCache[cacheKey] = { data: res, ts: Date.now() };
 
-    // Fetch metrics in background for pods and nodes
-    if (kind === "pods") {
-      invoke<PodMetricsInfo[]>("get_pod_metrics", { context: ctx, namespace: ns })
-        .then((metrics) => {
-          const map: Record<string, InlineMetrics> = {};
-          for (const m of metrics) {
-            map[`${m.namespace}/${m.name}`] = {
-              cpu: m.cpu_total,
-              memory: m.memory_total,
-              cpu_percent: m.cpu_percent ?? undefined,
-              memory_percent: m.memory_percent ?? undefined,
-              cpu_limit_percent: m.cpu_limit_percent ?? undefined,
-              memory_limit_percent: m.memory_limit_percent ?? undefined,
-              cpu_request: m.cpu_request ?? undefined,
-              memory_request: m.memory_request ?? undefined,
-              cpu_limit: m.cpu_limit ?? undefined,
-              memory_limit: m.memory_limit ?? undefined,
-            };
-          }
-          setResourceMetrics(map);
-        })
-        .catch(() => {}); // silently fail if metrics-server not available
-    } else if (kind === "nodes") {
-      invoke<NodeMetricsInfo[]>("get_node_metrics", { context: ctx })
-        .then((metrics) => {
-          const map: Record<string, InlineMetrics> = {};
-          for (const m of metrics) {
-            map[m.name] = {
-              cpu: m.cpu,
-              memory: m.memory,
-              cpu_percent: m.cpu_percent,
-              memory_percent: m.memory_percent,
-            };
-          }
-          setResourceMetrics(map);
-        })
-        .catch(() => {});
-    } else if (kind === "persistentvolumeclaims") {
-      setPvcMetrics({});
-      invoke<PvcMetricsInfo[]>("get_pvc_metrics", { context: ctx, namespace: ns })
-        .then((metrics) => {
-          const map: Record<string, PvcMetricsInfo> = {};
-          for (const m of metrics) {
-            map[`${m.namespace}/${m.name}`] = m;
-          }
-          setPvcMetrics(map);
-        })
-        .catch(() => {});
+    // Start a watcher for this kind so future updates are live
+    if (!lf) startResourceWatcher(kind);
+
+    // Update selectedResource with fresh data if it's in the new list
+    const selected = selectedResource();
+    if (selected) {
+      const fresh = res.find(
+        (r) => r.name === selected.name && r.namespace === selected.namespace && r.kind === selected.kind
+      );
+      if (fresh) {
+        setSelectedResource({ ...fresh });
+      }
     }
+
+    // Fetch metrics in background
+    loadInlineMetrics(ctx, ns, kind);
   } catch (e: any) {
     setError(e.toString());
   } finally {
     setLoading(false);
+  }
+}
+
+// Pre-fetch common resource types in background for instant switching
+async function prefetchResources() {
+  const ctx = activeContext();
+  if (!ctx) return;
+  const ns = activeNamespace();
+  const kinds = ["deployments", "services", "configmaps", "secrets", "statefulsets", "daemonsets", "jobs", "nodes"];
+  for (const kind of kinds) {
+    const cacheKey = getCacheKey(ctx, ns, kind);
+    if (resourceCache[cacheKey]) continue; // already cached
+    try {
+      const res = await invoke<K8sResource[]>("list_resources", {
+        context: ctx,
+        namespace: ns,
+        kind,
+        labelSelector: null,
+      });
+      resourceCache[cacheKey] = { data: res, ts: Date.now() };
+    } catch {
+      // silently skip — non-critical
+    }
   }
 }
 
@@ -390,6 +637,20 @@ export async function getResourceYaml(
   name: string
 ): Promise<string> {
   const ctx = activeContext();
+  // Use fast path for dynamic/CRD resources when we have API resource info
+  const dynRes = activeApiResource();
+  if (dynRes && dynRes.kind === kind) {
+    return invoke<string>("get_dynamic_resource_yaml", {
+      context: ctx,
+      namespace,
+      name,
+      group: dynRes.group,
+      version: dynRes.version,
+      plural: dynRes.name,
+      kind: dynRes.kind,
+      scope: dynRes.scope,
+    });
+  }
   return invoke<string>("get_resource_yaml", { context: ctx, namespace, kind, name });
 }
 
@@ -576,6 +837,7 @@ export async function loadEvents() {
     const result = await invoke<K8sEvent[]>("list_events", {
       context: ctx,
       namespace: activeNamespace(),
+      fieldSelector: null,
     });
     setEvents(result);
     setShowEventsPanel(true);
@@ -870,7 +1132,7 @@ export function startAutoRefresh() {
   stopAutoRefresh();
   setAutoRefresh(true);
   autoRefreshTimer = setInterval(() => {
-    loadResources();
+    loadResources(true);
   }, autoRefreshSecs() * 1000);
 }
 
@@ -1065,6 +1327,7 @@ export async function loadAlerts() {
     const evts = await invoke<K8sEvent[]>("list_events", {
       context: ctx,
       namespace: "_all",
+      fieldSelector: null,
     });
 
     const newAlerts: ClusterAlert[] = [];

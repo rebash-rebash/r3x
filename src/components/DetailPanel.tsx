@@ -172,98 +172,82 @@ export default function DetailPanel() {
     setWorkloadLogs([]);
     setShowPfPopover(false);
 
-    try {
-      const y = await getResourceYaml(
-        res.namespace || "default",
-        res.kind,
-        res.name
+    // Fire all API calls in parallel for speed
+    const promises: Promise<any>[] = [];
+    const ns = res.namespace || "default";
+    const ctx = activeContext();
+
+    // YAML (always needed)
+    promises.push(
+      getResourceYaml(ns, res.kind, res.name)
+        .then((y) => {
+          setYaml(y);
+          if (isScalable()) {
+            const match = y.match(/replicas:\s*(\d+)/);
+            if (match) setReplicaCount(parseInt(match[1]));
+          }
+        })
+        .catch((e: any) => { setYaml(`# Error loading YAML:\n# ${e}`); })
+    );
+
+    if (isPod()) {
+      // Containers
+      promises.push(
+        getPodContainers(ns, res.name)
+          .then((c) => { setContainers(c); if (c.length > 0) setSelectedContainer(c[0]); })
+          .catch(() => { setContainers([]); })
       );
-      setYaml(y);
-
-      // Extract replica count for scalable resources
-      if (isScalable()) {
-        const match = y.match(/replicas:\s*(\d+)/);
-        if (match) setReplicaCount(parseInt(match[1]));
-      }
-    } catch (e: any) {
-      setYaml(`# Error loading YAML:\n# ${e}`);
-    }
-
-    if (isPod()) {
-      try {
-        const c = await getPodContainers(res.namespace || "default", res.name);
-        setContainers(c);
-        if (c.length > 0) setSelectedContainer(c[0]);
-      } catch {
-        setContainers([]);
-      }
-      // Fetch per-container metrics
-      const ctx = activeContext();
+      // Container metrics
       if (ctx) {
-        invoke<PodMetricsInfo[]>("get_pod_metrics", {
-          context: ctx,
-          namespace: res.namespace || "default",
-        })
-          .then((metrics) => {
-            const podM = metrics.find((m) => m.name === res.name);
-            if (podM) {
-              const map: Record<string, ContainerMetricsInfo> = {};
-              for (const cm of podM.containers) {
-                map[cm.name] = cm;
+        promises.push(
+          invoke<PodMetricsInfo[]>("get_pod_metrics", { context: ctx, namespace: ns })
+            .then((metrics) => {
+              const podM = metrics.find((m) => m.name === res.name);
+              if (podM) {
+                const map: Record<string, ContainerMetricsInfo> = {};
+                for (const cm of podM.containers) map[cm.name] = cm;
+                setContainerMetrics(map);
               }
-              setContainerMetrics(map);
-            }
-          })
-          .catch(() => {});
+            })
+            .catch(() => {})
+        );
       }
-    }
-
-    // Fetch pods for workload resources
-    if (isWorkload()) {
-      try {
-        const pods = await getResourcePods(res.namespace || "default", res.kind, res.name);
-        setResourcePods(pods);
-      } catch {
-        setResourcePods([]);
-      }
-      // Fetch pod metrics for workload pods
-      const ctx = activeContext();
-      if (ctx) {
-        invoke<PodMetricsInfo[]>("get_pod_metrics", {
-          context: ctx,
-          namespace: res.namespace || "default",
-        })
-          .then((metrics) => {
-            const map: Record<string, PodMetricsInfo> = {};
-            for (const m of metrics) {
-              map[m.name] = m;
-            }
-            setPodMetricsMap(map);
-          })
-          .catch(() => {});
-      }
-    }
-
-    // Fetch node details
-    if (isNode()) {
-      try {
-        const info = await getNodeDetails(res.name);
-        setNodeInfo(info);
-      } catch {
-        setNodeInfo(null);
-      }
-    }
-
-    // Preload pod ports for port-forward
-    if (isPod()) {
-      getPodPorts(res.namespace || "default", res.name)
-        .then((ports) => setPfPorts(ports))
-        .catch(() => setPfPorts([]));
+      // Pod ports for port-forward
+      promises.push(
+        getPodPorts(ns, res.name).then((ports) => { setPfPorts(ports); }).catch(() => { setPfPorts([]); })
+      );
       refreshPortForwards();
     }
+
+    if (isWorkload()) {
+      // Workload pods
+      promises.push(
+        getResourcePods(ns, res.kind, res.name).then((pods) => { setResourcePods(pods); }).catch(() => { setResourcePods([]); })
+      );
+      // Pod metrics for workload
+      if (ctx) {
+        promises.push(
+          invoke<PodMetricsInfo[]>("get_pod_metrics", { context: ctx, namespace: ns })
+            .then((metrics) => {
+              const map: Record<string, PodMetricsInfo> = {};
+              for (const m of metrics) map[m.name] = m;
+              setPodMetricsMap(map);
+            })
+            .catch(() => {})
+        );
+      }
+    }
+
+    if (isNode()) {
+      promises.push(
+        getNodeDetails(res.name).then((info) => { setNodeInfo(info); }).catch(() => { setNodeInfo(null); })
+      );
+    }
+
     setShowPfPopover(false);
     setPfError(null);
 
+    await Promise.all(promises);
     setDetailLoading(false);
   });
 
@@ -272,8 +256,61 @@ export default function DetailPanel() {
     if (!res) return;
     setDescribeLoading(true);
     try {
-      const data = await describeResource(res.namespace || "default", res.kind, res.name);
-      setDescribeData(data);
+      if (res.kind === "Pod") {
+        // Full pod describe via backend
+        const data = await describeResource(res.namespace || "default", res.kind, res.name);
+        setDescribeData(data);
+      } else {
+        // For non-pod resources, parse labels/annotations from already-loaded YAML
+        // This avoids a second API call (and slow discovery for CRDs)
+        const y = yaml();
+        if (y && !y.startsWith("# Error")) {
+          try {
+            const lines = y.split("\n");
+            const labels: [string, string][] = [];
+            const annotations: [string, string][] = [];
+            let creation = "";
+            let section = "";
+            for (const line of lines) {
+              if (/^metadata:/.test(line)) { section = "metadata"; continue; }
+              if (/^spec:/.test(line) || /^status:/.test(line) || /^[a-zA-Z]/.test(line)) { section = ""; continue; }
+              if (section === "metadata") {
+                if (/^\s+labels:/.test(line)) { section = "labels"; continue; }
+                if (/^\s+annotations:/.test(line)) { section = "annotations"; continue; }
+                const tsMatch = line.match(/^\s+creationTimestamp:\s*['\"]?(.+?)['\"]?\s*$/);
+                if (tsMatch) creation = tsMatch[1];
+              }
+              if (section === "labels") {
+                const m = line.match(/^\s{4}(\S+):\s*['\"]?(.*?)['\"]?\s*$/);
+                if (m) labels.push([m[1], m[2]]);
+                else if (!/^\s{4}/.test(line)) section = "metadata";
+              }
+              if (section === "annotations") {
+                const m = line.match(/^\s{4}(\S+):\s*['\"]?(.*?)['\"]?\s*$/);
+                if (m) annotations.push([m[1], m[2].length > 200 ? m[2].slice(0, 200) + "..." : m[2]]);
+                else if (!/^\s{4}/.test(line)) section = "metadata";
+              }
+            }
+            setDescribeData({
+              kind: res.kind,
+              name: res.name,
+              namespace: res.namespace || "",
+              labels,
+              annotations,
+              creation_timestamp: creation,
+              pod: null,
+            });
+          } catch {
+            // Fallback to backend if parsing fails
+            const data = await describeResource(res.namespace || "default", res.kind, res.name);
+            setDescribeData(data);
+          }
+        } else {
+          // YAML not loaded yet, fallback to backend
+          const data = await describeResource(res.namespace || "default", res.kind, res.name);
+          setDescribeData(data);
+        }
+      }
     } catch {
       setDescribeData(null);
     }
@@ -392,12 +429,9 @@ export default function DetailPanel() {
       const allEvents = await invoke<K8sEvent[]>("list_events", {
         context: ctx,
         namespace: res.namespace || "_all",
+        fieldSelector: `involvedObject.name=${res.name},involvedObject.kind=${res.kind}`,
       });
-      // Filter events related to this resource
-      const filtered = allEvents.filter(
-        (ev) => ev.name === res.name && ev.kind === res.kind
-      );
-      setResourceEvents(filtered);
+      setResourceEvents(allEvents);
     } catch {
       setResourceEvents([]);
     }
@@ -653,7 +687,7 @@ export default function DetailPanel() {
     try {
       await scaleResource(res.namespace || "default", res.kind, res.name, newReplicas);
       setReplicaCount(newReplicas);
-      loadResources();
+      await loadResources();
     } catch (e: any) {
       alert(`Scale failed: ${e}`);
     }
@@ -989,7 +1023,9 @@ export default function DetailPanel() {
                   setRestarting(true);
                   try {
                     await rolloutRestart(res.namespace || "default", res.kind, res.name);
-                    loadResources();
+                    // Wait briefly for K8s to process the rollout
+                    await new Promise((r) => setTimeout(r, 1500));
+                    await loadResources();
                   } catch (e: any) {
                     alert(`Restart failed: ${e}`);
                   }

@@ -24,13 +24,14 @@ use k8s::nodes::{cordon_node, drain_node, get_node_details, uncordon_node};
 use k8s::portforward::{get_pod_ports, list_port_forwards, start_port_forward, stop_port_forward};
 use k8s::rbac::list_rbac_bindings;
 use k8s::restarts::get_restart_history;
-use k8s::resources::{apply_resource_yaml, delete_resource, get_resource_pods, get_resource_yaml, list_namespaces, list_resources};
+use k8s::resources::{apply_resource_yaml, delete_resource, get_dynamic_resource_yaml, get_resource_pods, get_resource_yaml, list_namespaces, list_resources};
 use k8s::scale::{scale_resource, rollout_restart};
 use k8s::metrics::{get_cluster_summary, get_node_metrics, get_pod_metrics, get_pvc_metrics};
 use k8s::security::scan_security;
 use k8s::summary::get_cluster_overview;
 use k8s::topology::get_topology;
 use k8s::traffic::get_traffic_distribution;
+use k8s::watcher::{start_watcher, stop_watcher, stop_all_watchers, get_watched_resources};
 
 /// Ensure exec-based auth plugins (gke-gcloud-auth-plugin, aws-iam-authenticator, etc.)
 /// are discoverable by inheriting the user's shell PATH.
@@ -196,6 +197,7 @@ pub fn run() {
             list_namespaces,
             list_resources,
             get_resource_yaml,
+            get_dynamic_resource_yaml,
             delete_resource,
             get_pod_logs,
             stream_pod_logs,
@@ -243,6 +245,10 @@ pub fn run() {
             get_cluster_health,
             get_cluster_overview,
             describe_resource,
+            start_watcher,
+            stop_watcher,
+            stop_all_watchers,
+            get_watched_resources,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

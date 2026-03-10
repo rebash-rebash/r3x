@@ -1,6 +1,6 @@
 [package]
 name = "r3x-app"
-version = "0.2.1"
+version = "0.3.0"
 description = "r3x - Lightweight Kubernetes cockpit by Rebash"
 authors = ["Rebash <admin@rebash.in>"]
 edition = "2021"

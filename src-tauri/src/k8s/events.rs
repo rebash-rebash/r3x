@@ -24,6 +24,7 @@ pub struct K8sEvent {
 pub async fn list_events(
     context: String,
     namespace: String,
+    field_selector: Option<String>,
 ) -> Result<Vec<K8sEvent>, String> {
     let client = get_client(&context).await?;
     let api: Api<Event> = if namespace == "_all" {
@@ -32,8 +33,13 @@ pub async fn list_events(
         Api::namespaced(client, &namespace)
     };
 
+    let mut lp = ListParams::default();
+    if let Some(fs) = field_selector {
+        lp = lp.fields(&fs);
+    }
+
     let list = api
-        .list(&ListParams::default())
+        .list(&lp)
         .await
         .map_err(|e| format!("Failed to list events: {}", e))?;
 

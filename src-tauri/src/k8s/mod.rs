@@ -25,3 +25,4 @@ pub mod security;
 pub mod summary;
 pub mod topology;
 pub mod traffic;
+pub mod watcher;

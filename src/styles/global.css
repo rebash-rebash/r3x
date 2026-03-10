@@ -2664,6 +2664,27 @@ body {
   border-top: 1px solid var(--border);
 }
 
+.sidebar-links {
+  display: flex;
+  gap: 8px;
+  padding: 6px 16px;
+  align-items: center;
+}
+
+.sidebar-link {
+  color: var(--text-muted);
+  cursor: pointer;
+  opacity: 0.6;
+  transition: opacity 0.15s, color 0.15s;
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-link:hover {
+  opacity: 1;
+  color: var(--accent);
+}
+
 /* Help panel */
 .help-panel {
   flex: 1;
