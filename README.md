@@ -20,7 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue" alt="Platform" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License" />
-  <img src="https://img.shields.io/badge/version-0.2.1-orange" alt="Version" />
+  <img src="https://img.shields.io/badge/version-0.3.1-orange" alt="Version" />
   <img src="https://img.shields.io/badge/rust-stable-brightgreen" alt="Rust" />
 </p>
 
@@ -87,6 +87,7 @@ r3x gives you a real GUI with the resource efficiency of a terminal app. No Elec
 - **Topology graph** — Visual tree of Controllers → ReplicaSets → Pods → Containers with status indicators
 - **Helm releases** — View all Helm releases with status, chart version, and revision history
 - **RBAC viewer** — Inspect ClusterRoleBindings and RoleBindings with subject details and search
+- **RBAC audit** — Deep analysis of RBAC risks: wildcard permissions, cluster-admin exposure, privilege escalation, tenant isolation
 - **Network Policies** — Policy list with selector matching, rule details, and unprotected pod detection
 - **Events log** — Cluster-wide event stream with filtering by type, reason, and object
 - **Health Score** — Cluster health analysis with scoring and actionable recommendations
@@ -106,6 +107,14 @@ r3x gives you a real GUI with the resource efficiency of a terminal app. No Elec
 - **Security score** — 0-100 score with severity breakdown (Critical / High / Medium / Low)
 - **Filterable findings** — Filter by severity, category, or search
 - **Image scanning** — Detect image vulnerabilities and outdated base images
+- **RBAC audit** — Analyzes RoleBindings, ClusterRoleBindings, Roles, and ClusterRoles for risky configurations:
+  - **Wildcard permissions** — Detects `*.*.*` full wildcards, wildcard verbs, and wildcard resource access
+  - **Cluster-admin exposure** — Flags non-system subjects bound to `cluster-admin`
+  - **Privilege escalation paths** — Identifies `escalate`, `bind`, `impersonate` verbs on RBAC resources, plus access to secrets, `pods/exec`, and ServiceAccount tokens
+  - **Cross-namespace access** — Flags RoleBindings referencing overly broad ClusterRoles
+  - **Tenant isolation** — Maps subjects to namespaces and detects identities that span multiple tenant boundaries or have both cluster-wide and namespace-scoped access
+  - **Default ServiceAccount bindings** — Detects default SA bound to ClusterRoles, which silently grants permissions to every pod in a namespace
+  - **RBAC score** — 0-100 weighted score with severity breakdown and per-finding remediation guidance
 
 ### Resource Benchmarking
 - **CPU & memory recommendations** — Analyzes actual usage metrics and recommends right-sized requests and limits
@@ -119,7 +128,7 @@ r3x gives you a real GUI with the resource efficiency of a terminal app. No Elec
   - `:pods`, `:deploy`, `:services` — switch resource type
   - `:ns default`, `:ns kube-system` — switch namespace
   - `:ctx my-cluster` — switch context
-  - `:helm`, `:rbac`, `:dashboard`, `:topology`, `:security` — open views
+  - `:helm`, `:rbac`, `:dashboard`, `:topology`, `:security`, `:rbac-audit` — open views
 
 ### Quality of Life
 - **Dark / Light theme** — Toggle with `t`
@@ -166,7 +175,7 @@ git clone https://github.com/rebash-rebash/r3x.git
 cd r3x
 npm install
 cargo tauri build
-# Installer at: src-tauri\target\release\bundle\nsis\r3x_0.2.1_x64-setup.exe
+# Installer at: src-tauri\target\release\bundle\nsis\r3x_0.3.1_x64-setup.exe
 ```
 
 ### Linux
@@ -273,6 +282,7 @@ r3x/
 │   │   ├── SecurityPanel.tsx   # Security scan results
 │   │   ├── HelmPanel.tsx       # Helm releases viewer
 │   │   ├── RbacPanel.tsx       # RBAC bindings viewer
+│   │   ├── RbacAuditPanel.tsx  # RBAC audit findings
 │   │   ├── HealthPanel.tsx     # Cluster health scoring
 │   │   ├── NetpolPanel.tsx     # Network policy viewer
 │   │   ├── EventsPanel.tsx     # Cluster events log
@@ -302,6 +312,7 @@ r3x/
 │           ├── cost.rs         # Cost estimation
 │           ├── helm.rs         # Helm CLI integration
 │           ├── rbac.rs         # RBAC binding queries
+│           ├── rbac_audit.rs   # RBAC audit engine
 │           ├── netpol.rs       # Network policy analysis
 │           ├── events.rs       # Kubernetes events
 │           ├── nodes.rs        # Node details, cordon/drain
