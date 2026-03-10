@@ -32,6 +32,8 @@ import {
   loadEvents,
   eventsLoading,
   closeAllViewPanels,
+  showHelpPanel,
+  setShowHelpPanel,
 } from "../stores/k8s";
 
 export default function Sidebar() {
@@ -87,6 +89,7 @@ export default function Sidebar() {
       <div class="sidebar-header">
         <h1>r3x</h1>
         <span class="badge">rebash</span>
+        <span class="version-label">v0.2.1</span>
       </div>
 
       <div class="sidebar-section">
@@ -330,6 +333,20 @@ export default function Sidebar() {
             {securityScanning() ? "Scanning..." : "Security Scan"}
           </button>
         </Show>
+      </div>
+
+      <div class="sidebar-help">
+        <button
+          class={`sidebar-item ${showHelpPanel() ? "active" : ""}`}
+          onClick={() => {
+            if (showHelpPanel()) { closeAllViewPanels(); return; }
+            closeAllViewPanels();
+            setShowHelpPanel(true);
+          }}
+        >
+          <span class="icon">?</span>
+          Help &amp; Guide
+        </button>
       </div>
     </aside>
   );

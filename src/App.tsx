@@ -32,6 +32,8 @@ import KeyboardBar from "./components/KeyboardBar";
 import HealthPanel from "./components/HealthPanel";
 import NetpolPanel from "./components/NetpolPanel";
 import EventsPanel from "./components/EventsPanel";
+import HelpPanel from "./components/HelpPanel";
+import { showHelpPanel } from "./stores/k8s";
 import "./styles/global.css";
 
 function App() {
@@ -158,7 +160,10 @@ function App() {
         <Show when={showHealthPanel()}>
           <HealthPanel />
         </Show>
-        <Show when={!showDashboard() && !showHelmPanel() && !showRbacPanel() && !showTopologyPanel() && !showSecurityPanel() && !showEventsPanel() && !showHealthPanel() && !showNetpolPanel()}>
+        <Show when={showHelpPanel()}>
+          <HelpPanel />
+        </Show>
+        <Show when={!showDashboard() && !showHelmPanel() && !showRbacPanel() && !showTopologyPanel() && !showSecurityPanel() && !showEventsPanel() && !showHealthPanel() && !showNetpolPanel() && !showHelpPanel()}>
           <ResourceTable />
           <DetailPanel />
         </Show>

@@ -565,6 +565,9 @@ const [showEventsPanel, setShowEventsPanel] = createSignal(false);
 
 export { events, eventsLoading, showEventsPanel, setShowEventsPanel };
 
+const [showHelpPanel, setShowHelpPanel] = createSignal(false);
+export { showHelpPanel, setShowHelpPanel };
+
 export async function loadEvents() {
   try {
     setEventsLoading(true);
@@ -663,6 +666,86 @@ export async function startPortForward(
 export async function stopPortForward(sessionId: string) {
   await invoke<string>("stop_port_forward", { sessionId });
   setPortForwards((prev) => prev.filter((p) => p.id !== sessionId));
+}
+
+// Describe resource
+export interface PodConditionDesc {
+  condition_type: string;
+  status: string;
+  reason: string;
+  message: string;
+  last_transition: string;
+}
+
+export interface ContainerDescribe {
+  name: string;
+  image: string;
+  state: string;
+  ready: boolean;
+  restart_count: number;
+  ports: string[];
+  cpu_request: string;
+  cpu_limit: string;
+  memory_request: string;
+  memory_limit: string;
+  liveness_probe: string;
+  readiness_probe: string;
+  startup_probe: string;
+  env_count: number;
+  mounts: string[];
+}
+
+export interface VolumeDescribe {
+  name: string;
+  volume_type: string;
+  details: string;
+}
+
+export interface PodDescribe {
+  name: string;
+  namespace: string;
+  node: string;
+  status: string;
+  phase: string;
+  pod_ip: string;
+  host_ip: string;
+  qos_class: string;
+  start_time: string;
+  labels: [string, string][];
+  annotations: [string, string][];
+  conditions: PodConditionDesc[];
+  containers: ContainerDescribe[];
+  init_containers: ContainerDescribe[];
+  volumes: VolumeDescribe[];
+  tolerations: string[];
+  service_account: string;
+  priority_class: string;
+  restart_policy: string;
+  dns_policy: string;
+}
+
+export interface ResourceDescribe {
+  kind: string;
+  name: string;
+  namespace: string;
+  labels: [string, string][];
+  annotations: [string, string][];
+  creation_timestamp: string;
+  pod: PodDescribe | null;
+}
+
+export async function describeResource(
+  namespace: string,
+  kind: string,
+  name: string
+): Promise<ResourceDescribe> {
+  const ctx = activeContext();
+  return invoke<ResourceDescribe>("describe_resource", {
+    context: ctx,
+    namespace,
+    kind,
+    name,
+  });
 }
 
 // Resource pods (for workload detail)
@@ -1624,6 +1707,7 @@ export function closeAllViewPanels() {
   setShowNetpolPanel(false);
   setShowEventsPanel(false);
   setShowSecurityPanel(false);
+  setShowHelpPanel(false);
   setActiveResourceKind("");
 }
 

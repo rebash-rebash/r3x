@@ -1,6 +1,7 @@
 import { createSignal, createEffect, Show, For, onCleanup } from "solid-js";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   selectedResource,
   setSelectedResource,
@@ -49,6 +50,14 @@ import {
   DiffResult,
   diffResources,
   resources,
+  ResourceDescribe,
+  describeResource,
+  getPodPorts,
+  startPortForward,
+  stopPortForward,
+  refreshPortForwards,
+  portForwards,
+  ContainerPort as ContainerPortInfo,
 } from "../stores/k8s";
 import Terminal from "./Terminal";
 
@@ -106,6 +115,15 @@ export default function DetailPanel() {
   const [diffData, setDiffData] = createSignal<DiffResult | null>(null);
   const [diffLoading, setDiffLoading] = createSignal(false);
   const [diffTarget, setDiffTarget] = createSignal("");
+  const [describeData, setDescribeData] = createSignal<ResourceDescribe | null>(null);
+  const [describeLoading, setDescribeLoading] = createSignal(false);
+  const [pfPorts, setPfPorts] = createSignal<ContainerPortInfo[]>([]);
+  const [pfLocalPort, setPfLocalPort] = createSignal("");
+  const [pfRemotePort, setPfRemotePort] = createSignal<number | null>(null);
+  const [pfStarting, setPfStarting] = createSignal(false);
+  const [pfError, setPfError] = createSignal<string | null>(null);
+  const [showPfPopover, setShowPfPopover] = createSignal(false);
+  const [pfPopoverPos, setPfPopoverPos] = createSignal({ top: 0, right: 0 });
 
   const resource = () => selectedResource();
   const isPod = () => resource()?.kind === "Pod";
@@ -152,6 +170,7 @@ export default function DetailPanel() {
     if (unlistenWorkloadStream) { unlistenWorkloadStream(); unlistenWorkloadStream = null; }
     setWorkloadStreaming(false);
     setWorkloadLogs([]);
+    setShowPfPopover(false);
 
     try {
       const y = await getResourceYaml(
@@ -235,8 +254,80 @@ export default function DetailPanel() {
       }
     }
 
+    // Preload pod ports for port-forward
+    if (isPod()) {
+      getPodPorts(res.namespace || "default", res.name)
+        .then((ports) => setPfPorts(ports))
+        .catch(() => setPfPorts([]));
+      refreshPortForwards();
+    }
+    setShowPfPopover(false);
+    setPfError(null);
+
     setDetailLoading(false);
   });
+
+  async function loadDescribe() {
+    const res = resource();
+    if (!res) return;
+    setDescribeLoading(true);
+    try {
+      const data = await describeResource(res.namespace || "default", res.kind, res.name);
+      setDescribeData(data);
+    } catch {
+      setDescribeData(null);
+    }
+    setDescribeLoading(false);
+  }
+
+  async function handlePortForward() {
+    const res = resource();
+    if (!res) return;
+    const lp = parseInt(pfLocalPort());
+    const rp = pfRemotePort();
+    if (!lp || !rp || lp < 1 || rp < 1) {
+      setPfError("Invalid port numbers");
+      return;
+    }
+    setPfStarting(true);
+    setPfError(null);
+    try {
+      await startPortForward(res.namespace || "default", res.name, lp, rp);
+      setPfLocalPort("");
+      setShowPfPopover(false);
+    } catch (e: any) {
+      setPfError(e.toString());
+    }
+    setPfStarting(false);
+  }
+
+  // Close port-forward popover on click outside
+  function handleGlobalClick(e: MouseEvent) {
+    if (!showPfPopover()) return;
+    const target = e.target as HTMLElement;
+    if (!target.closest(".pf-popover") && !target.closest(".pf-icon-btn")) {
+      setShowPfPopover(false);
+    }
+  }
+
+  createEffect(() => {
+    if (showPfPopover()) {
+      document.addEventListener("click", handleGlobalClick);
+    } else {
+      document.removeEventListener("click", handleGlobalClick);
+    }
+  });
+
+  onCleanup(() => {
+    document.removeEventListener("click", handleGlobalClick);
+  });
+
+  // Wrap tab switching to also close popover
+  function switchTab(tab: DetailTab) {
+    setShowPfPopover(false);
+    setActiveTab(tab);
+    if (tab === "describe") loadDescribe();
+  }
 
   async function handleCordon() {
     const res = resource();
@@ -657,11 +748,11 @@ export default function DetailPanel() {
       if (e.key === "c" && !e.ctrlKey && !e.metaKey) { e.preventDefault(); handleCordon(); }
       if (e.key === "u" && !e.ctrlKey && !e.metaKey) { e.preventDefault(); handleUncordon(); }
       if (e.key === "r" && !e.ctrlKey && !e.metaKey) { e.preventDefault(); setConfirmDrain(true); }
-      if (e.key === "d" && !e.ctrlKey && !e.metaKey) { e.preventDefault(); setActiveTab("describe"); }
-      if (e.key === "y" && !e.ctrlKey && !e.metaKey) { e.preventDefault(); setActiveTab("yaml"); }
+      if (e.key === "d" && !e.ctrlKey && !e.metaKey) { e.preventDefault(); switchTab("describe"); }
+      if (e.key === "y" && !e.ctrlKey && !e.metaKey) { e.preventDefault(); switchTab("yaml"); }
       if (e.key === "e" && !e.ctrlKey && !e.metaKey) {
         e.preventDefault();
-        setActiveTab("yaml");
+        switchTab("yaml");
         setEditYaml(yaml());
         setApplyError("");
         setEditing(true);
@@ -709,50 +800,50 @@ export default function DetailPanel() {
             <div class="detail-tabs">
               <button
                 class={`detail-tab ${activeTab() === "yaml" ? "active" : ""}`}
-                onClick={() => setActiveTab("yaml")}
+                onClick={() => switchTab("yaml")}
               >
                 YAML
               </button>
               <Show when={isWorkload()}>
                 <button
                   class={`detail-tab ${activeTab() === "pods" ? "active" : ""}`}
-                  onClick={() => setActiveTab("pods")}
+                  onClick={() => switchTab("pods")}
                 >
                   Pods
                 </button>
                 <button
                   class={`detail-tab ${activeTab() === "logs" ? "active" : ""}`}
-                  onClick={() => setActiveTab("logs")}
+                  onClick={() => switchTab("logs")}
                 >
                   Logs
                 </button>
                 <button
                   class={`detail-tab ${activeTab() === "traffic" ? "active" : ""}`}
-                  onClick={() => setActiveTab("traffic")}
+                  onClick={() => switchTab("traffic")}
                 >
                   Traffic
                 </button>
                 <button
                   class={`detail-tab ${activeTab() === "cost" ? "active" : ""}`}
-                  onClick={() => setActiveTab("cost")}
+                  onClick={() => switchTab("cost")}
                 >
                   Cost
                 </button>
                 <button
                   class={`detail-tab ${activeTab() === "restarts" ? "active" : ""}`}
-                  onClick={() => setActiveTab("restarts")}
+                  onClick={() => switchTab("restarts")}
                 >
                   Restarts
                 </button>
                 <button
                   class={`detail-tab ${activeTab() === "images" ? "active" : ""}`}
-                  onClick={() => setActiveTab("images")}
+                  onClick={() => switchTab("images")}
                 >
                   Images
                 </button>
                 <button
                   class={`detail-tab ${activeTab() === "hpa" ? "active" : ""}`}
-                  onClick={() => setActiveTab("hpa")}
+                  onClick={() => switchTab("hpa")}
                 >
                   HPA/VPA
                 </button>
@@ -760,7 +851,7 @@ export default function DetailPanel() {
               <Show when={isCronJob()}>
                 <button
                   class={`detail-tab ${activeTab() === "cronjob" ? "active" : ""}`}
-                  onClick={() => setActiveTab("cronjob")}
+                  onClick={() => switchTab("cronjob")}
                 >
                   Jobs
                 </button>
@@ -768,7 +859,7 @@ export default function DetailPanel() {
               <Show when={isConfigOrSecret()}>
                 <button
                   class={`detail-tab ${activeTab() === "diff" ? "active" : ""}`}
-                  onClick={() => setActiveTab("diff")}
+                  onClick={() => switchTab("diff")}
                 >
                   Diff
                 </button>
@@ -776,59 +867,51 @@ export default function DetailPanel() {
               <Show when={isPod()}>
                 <button
                   class={`detail-tab ${activeTab() === "containers" ? "active" : ""}`}
-                  onClick={() => setActiveTab("containers")}
+                  onClick={() => switchTab("containers")}
                 >
                   Containers
                 </button>
                 <button
                   class={`detail-tab ${activeTab() === "logs" ? "active" : ""}`}
-                  onClick={() => setActiveTab("logs")}
+                  onClick={() => switchTab("logs")}
                 >
                   Logs
                 </button>
                 <button
                   class={`detail-tab ${activeTab() === "exec" ? "active" : ""}`}
-                  onClick={() => setActiveTab("exec")}
+                  onClick={() => switchTab("exec")}
                 >
                   Exec
                 </button>
               </Show>
-              <Show when={isNode()}>
-                <button
-                  class={`detail-tab ${activeTab() === "describe" ? "active" : ""}`}
-                  onClick={() => setActiveTab("describe")}
-                >
-                  Describe
-                </button>
-              </Show>
               <button
-                class={`detail-tab ${activeTab() === "labels" ? "active" : ""}`}
-                onClick={() => setActiveTab("labels")}
+                class={`detail-tab ${activeTab() === "describe" ? "active" : ""}`}
+                onClick={() => switchTab("describe")}
               >
-                Labels
+                Describe
               </button>
               <button
                 class={`detail-tab ${activeTab() === "events" ? "active" : ""}`}
-                onClick={() => setActiveTab("events")}
+                onClick={() => switchTab("events")}
               >
                 Events
               </button>
               <Show when={isPod()}>
                 <button
                   class={`detail-tab ${activeTab() === "benchmark" ? "active" : ""}`}
-                  onClick={() => setActiveTab("benchmark")}
+                  onClick={() => switchTab("benchmark")}
                 >
                   Benchmark
                 </button>
                 <button
                   class={`detail-tab ${activeTab() === "restarts" ? "active" : ""}`}
-                  onClick={() => setActiveTab("restarts")}
+                  onClick={() => switchTab("restarts")}
                 >
                   Restarts
                 </button>
                 <button
                   class={`detail-tab ${activeTab() === "images" ? "active" : ""}`}
-                  onClick={() => setActiveTab("images")}
+                  onClick={() => switchTab("images")}
                 >
                   Images
                 </button>
@@ -915,6 +998,94 @@ export default function DetailPanel() {
               >
                 {restarting() ? "Restarting..." : "Restart"}
               </button>
+            </Show>
+
+            <Show when={isPod()}>
+              <button
+                ref={(el) => { (el as any).__pfBtn = true; }}
+                class={`action-btn pf-icon-btn ${showPfPopover() ? "active" : ""}`}
+                title="Port Forward"
+                onClick={(e) => {
+                  const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                  setPfPopoverPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right });
+                  setShowPfPopover(!showPfPopover());
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="10" />
+                  <path d="M2 12h20" />
+                  <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+                </svg>
+              </button>
+              <Show when={showPfPopover()}>
+                <div class="pf-popover" style={{ top: `${pfPopoverPos().top}px`, right: `${pfPopoverPos().right}px` }}>
+                  <div style={{ "font-size": "11px", color: "var(--text-secondary)", "margin-bottom": "6px", "text-transform": "uppercase", "letter-spacing": "0.5px" }}>
+                    Port Forward — {resource()?.name}
+                  </div>
+                  <Show when={pfPorts().length > 0}>
+                    <div style={{ "margin-bottom": "8px", display: "flex", gap: "4px", "flex-wrap": "wrap" }}>
+                      <For each={pfPorts()}>
+                        {(cp) => (
+                          <button
+                            class={`pf-port-chip ${pfRemotePort() === cp.port ? "active" : ""}`}
+                            onClick={() => { setPfRemotePort(cp.port); setPfLocalPort(cp.port.toString()); }}
+                          >
+                            {cp.port}/{cp.protocol} <span style={{ color: "var(--text-muted)", "font-size": "10px" }}>{cp.container_name}</span>
+                          </button>
+                        )}
+                      </For>
+                    </div>
+                  </Show>
+                  <div style={{ display: "flex", gap: "6px", "align-items": "center" }}>
+                    <input
+                      type="number"
+                      placeholder="Local"
+                      value={pfLocalPort()}
+                      onInput={(e) => setPfLocalPort(e.currentTarget.value)}
+                      style={{ width: "70px", padding: "4px 6px", "border-radius": "4px", border: "1px solid var(--border)", background: "var(--bg-secondary)", color: "var(--text-primary)", "font-size": "12px" }}
+                    />
+                    <span style={{ color: "var(--text-muted)", "font-size": "12px" }}>→</span>
+                    <input
+                      type="number"
+                      placeholder="Remote"
+                      value={pfRemotePort() || ""}
+                      onInput={(e) => setPfRemotePort(parseInt(e.currentTarget.value) || null)}
+                      style={{ width: "70px", padding: "4px 6px", "border-radius": "4px", border: "1px solid var(--border)", background: "var(--bg-secondary)", color: "var(--text-primary)", "font-size": "12px" }}
+                    />
+                    <button class="action-btn" disabled={pfStarting()} onClick={handlePortForward} style={{ "font-size": "11px", padding: "4px 10px" }}>
+                      {pfStarting() ? "..." : "Forward"}
+                    </button>
+                  </div>
+                  <Show when={pfError()}>
+                    <div style={{ color: "var(--danger)", "font-size": "11px", "margin-top": "4px" }}>{pfError()}</div>
+                  </Show>
+                  <Show when={portForwards().filter(p => p.pod_name === resource()?.name).length > 0}>
+                    <div style={{ "margin-top": "8px", "border-top": "1px solid var(--border)", "padding-top": "6px" }}>
+                      <For each={portForwards().filter(p => p.pod_name === resource()?.name)}>
+                        {(pf) => {
+                          const proto = pf.remote_port === 443 || pf.remote_port === 8443 ? "https" : "http";
+                          const url = `${proto}://localhost:${pf.local_port}`;
+                          return (
+                            <div style={{ display: "flex", "align-items": "center", "justify-content": "space-between", "font-size": "11px", padding: "3px 0" }}>
+                              <a class="pf-link" onClick={() => openUrl(url)} title={`Open ${url} in browser`}>
+                                {url}
+                              </a>
+                              <span style={{ color: "var(--text-muted)", margin: "0 6px" }}>→ {pf.remote_port}</span>
+                              <button
+                                class="action-btn danger"
+                                style={{ "font-size": "10px", padding: "1px 6px" }}
+                                onClick={async () => { await stopPortForward(pf.id); refreshPortForwards(); }}
+                              >
+                                Stop
+                              </button>
+                            </div>
+                          );
+                        }}
+                      </For>
+                    </div>
+                  </Show>
+                </div>
+              </Show>
             </Show>
 
             <Show when={!confirmDelete()}>
@@ -1361,32 +1532,190 @@ export default function DetailPanel() {
             </div>
           </Show>
 
-          <Show when={!detailLoading() && activeTab() === "labels"}>
-            <div style={{ padding: "12px 16px" }}>
-              <table class="resource-table">
-                <thead>
-                  <tr>
-                    <th>Key</th>
-                    <th>Value</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <For each={Object.entries(resource()!.labels || {})}>
-                    {([key, value]) => (
-                      <tr>
-                        <td>{key}</td>
-                        <td>{value}</td>
-                      </tr>
-                    )}
-                  </For>
-                </tbody>
-              </table>
-              <Show when={Object.keys(resource()!.labels || {}).length === 0}>
-                <div class="empty-state">
-                  <p>No labels</p>
-                </div>
-              </Show>
-            </div>
+          <Show when={!detailLoading() && activeTab() === "describe" && !isNode()}>
+            <Show when={describeLoading()}>
+              <div class="loading-overlay"><span class="spinner" /> Loading...</div>
+            </Show>
+            <Show when={!describeLoading() && describeData()}>
+              {(() => {
+                const d = describeData()!;
+                const pod = d.pod;
+                return (
+                  <div style={{ padding: "12px 16px", overflow: "auto" }}>
+                    {/* General */}
+                    <h4 class="describe-section-title">General</h4>
+                    <table class="resource-table">
+                      <tbody>
+                        <tr><td class="describe-label">Kind</td><td>{d.kind}</td></tr>
+                        <tr><td class="describe-label">Name</td><td>{d.name}</td></tr>
+                        <tr><td class="describe-label">Namespace</td><td>{d.namespace || "-"}</td></tr>
+                        <tr><td class="describe-label">Created</td><td>{d.creation_timestamp || "-"}</td></tr>
+                        <Show when={pod}>
+                          <tr><td class="describe-label">Node</td><td>{pod!.node}</td></tr>
+                          <tr><td class="describe-label">Status</td><td><span style={{ color: pod!.status === "Running" ? "var(--success)" : pod!.status === "Failed" ? "var(--danger)" : "var(--warning)", "font-weight": "600" }}>{pod!.status}</span></td></tr>
+                          <tr><td class="describe-label">Pod IP</td><td>{pod!.pod_ip}</td></tr>
+                          <tr><td class="describe-label">Host IP</td><td>{pod!.host_ip}</td></tr>
+                          <tr><td class="describe-label">QoS Class</td><td>{pod!.qos_class}</td></tr>
+                          <tr><td class="describe-label">Start Time</td><td>{pod!.start_time}</td></tr>
+                          <tr><td class="describe-label">Service Account</td><td>{pod!.service_account}</td></tr>
+                          <tr><td class="describe-label">Priority Class</td><td>{pod!.priority_class}</td></tr>
+                          <tr><td class="describe-label">Restart Policy</td><td>{pod!.restart_policy}</td></tr>
+                          <tr><td class="describe-label">DNS Policy</td><td>{pod!.dns_policy}</td></tr>
+                        </Show>
+                      </tbody>
+                    </table>
+
+                    {/* Labels */}
+                    <h4 class="describe-section-title">Labels</h4>
+                    <Show when={d.labels.length > 0} fallback={<div class="describe-empty">No labels</div>}>
+                      <table class="resource-table">
+                        <tbody>
+                          <For each={d.labels}>
+                            {([key, value]) => (
+                              <tr><td class="describe-label">{key}</td><td style={{ "word-break": "break-all" }}>{value}</td></tr>
+                            )}
+                          </For>
+                        </tbody>
+                      </table>
+                    </Show>
+
+                    {/* Annotations */}
+                    <h4 class="describe-section-title">Annotations</h4>
+                    <Show when={d.annotations.length > 0} fallback={<div class="describe-empty">No annotations</div>}>
+                      <table class="resource-table">
+                        <tbody>
+                          <For each={d.annotations}>
+                            {([key, value]) => (
+                              <tr><td class="describe-label" style={{ "min-width": "200px" }}>{key}</td><td style={{ "word-break": "break-all", "font-size": "11px" }}>{value}</td></tr>
+                            )}
+                          </For>
+                        </tbody>
+                      </table>
+                    </Show>
+
+                    {/* Pod-specific sections */}
+                    <Show when={pod}>
+                      {/* Conditions */}
+                      <h4 class="describe-section-title">Conditions</h4>
+                      <Show when={pod!.conditions.length > 0} fallback={<div class="describe-empty">No conditions</div>}>
+                        <table class="resource-table">
+                          <thead><tr><th>Type</th><th>Status</th><th>Reason</th><th>Message</th><th>Last Transition</th></tr></thead>
+                          <tbody>
+                            <For each={pod!.conditions}>
+                              {(cond) => (
+                                <tr>
+                                  <td>{cond.condition_type}</td>
+                                  <td><span style={{ color: cond.status === "True" ? "var(--success)" : "var(--text-muted)" }}>{cond.status}</span></td>
+                                  <td style={{ color: "var(--text-secondary)", "font-size": "11px" }}>{cond.reason || "-"}</td>
+                                  <td style={{ color: "var(--text-secondary)", "font-size": "11px", "max-width": "250px", overflow: "hidden", "text-overflow": "ellipsis" }}>{cond.message || "-"}</td>
+                                  <td style={{ color: "var(--text-secondary)", "font-size": "11px" }}>{cond.last_transition || "-"}</td>
+                                </tr>
+                              )}
+                            </For>
+                          </tbody>
+                        </table>
+                      </Show>
+
+                      {/* Init Containers */}
+                      <h4 class="describe-section-title">Init Containers ({pod!.init_containers.length})</h4>
+                      <Show when={pod!.init_containers.length > 0} fallback={<div class="describe-empty">None</div>}>
+                        <For each={pod!.init_containers}>
+                          {(c) => (
+                            <div class="describe-container-card">
+                              <div class="describe-container-name">
+                                {c.name}
+                                <span style={{ "margin-left": "8px", "font-size": "10px", color: c.ready ? "var(--success)" : "var(--text-muted)" }}>
+                                  {c.ready ? "Ready" : "Not Ready"}
+                                </span>
+                              </div>
+                              <table class="resource-table">
+                                <tbody>
+                                  <tr><td class="describe-label">Image</td><td style={{ "word-break": "break-all" }}>{c.image}</td></tr>
+                                  <tr><td class="describe-label">State</td><td><span style={{ color: c.state.startsWith("Running") ? "var(--success)" : c.state.startsWith("Terminated") ? "var(--text-muted)" : "var(--warning)" }}>{c.state}</span></td></tr>
+                                  <tr><td class="describe-label">Ready</td><td>{c.ready ? "Yes" : "No"}</td></tr>
+                                  <tr><td class="describe-label">Restarts</td><td>{c.restart_count}</td></tr>
+                                  <tr><td class="describe-label">Ports</td><td>{c.ports.length > 0 ? c.ports.join(", ") : "None"}</td></tr>
+                                  <tr><td class="describe-label">CPU</td><td>request: {c.cpu_request} / limit: {c.cpu_limit}</td></tr>
+                                  <tr><td class="describe-label">Memory</td><td>request: {c.memory_request} / limit: {c.memory_limit}</td></tr>
+                                  <tr><td class="describe-label">Liveness</td><td style={{ "font-size": "11px" }}>{c.liveness_probe}</td></tr>
+                                  <tr><td class="describe-label">Readiness</td><td style={{ "font-size": "11px" }}>{c.readiness_probe}</td></tr>
+                                  <tr><td class="describe-label">Startup</td><td style={{ "font-size": "11px" }}>{c.startup_probe}</td></tr>
+                                  <tr><td class="describe-label">Env Vars</td><td>{c.env_count} variable{c.env_count !== 1 ? "s" : ""}</td></tr>
+                                  <tr><td class="describe-label">Mounts</td><td style={{ "font-size": "11px" }}>{c.mounts.length > 0 ? <For each={c.mounts}>{(m) => <div>{m}</div>}</For> : "None"}</td></tr>
+                                </tbody>
+                              </table>
+                            </div>
+                          )}
+                        </For>
+                      </Show>
+
+                      {/* Containers */}
+                      <h4 class="describe-section-title">Containers ({pod!.containers.length})</h4>
+                      <For each={pod!.containers}>
+                        {(c) => (
+                          <div class="describe-container-card">
+                            <div class="describe-container-name">
+                              {c.name}
+                              <span style={{ "margin-left": "8px", "font-size": "10px", color: c.ready ? "var(--success)" : "var(--danger)" }}>
+                                {c.ready ? "Ready" : "Not Ready"}
+                              </span>
+                            </div>
+                            <table class="resource-table">
+                              <tbody>
+                                <tr><td class="describe-label">Image</td><td style={{ "word-break": "break-all" }}>{c.image}</td></tr>
+                                <tr><td class="describe-label">State</td><td><span style={{ color: c.state.startsWith("Running") ? "var(--success)" : c.state.startsWith("Waiting") ? "var(--warning)" : "var(--danger)" }}>{c.state}</span></td></tr>
+                                <tr><td class="describe-label">Ready</td><td>{c.ready ? "Yes" : "No"}</td></tr>
+                                <tr><td class="describe-label">Restarts</td><td>{c.restart_count}</td></tr>
+                                <tr><td class="describe-label">Ports</td><td>{c.ports.length > 0 ? c.ports.join(", ") : "None"}</td></tr>
+                                <tr><td class="describe-label">CPU</td><td>request: {c.cpu_request} / limit: {c.cpu_limit}</td></tr>
+                                <tr><td class="describe-label">Memory</td><td>request: {c.memory_request} / limit: {c.memory_limit}</td></tr>
+                                <tr><td class="describe-label">Liveness</td><td style={{ "font-size": "11px" }}>{c.liveness_probe}</td></tr>
+                                <tr><td class="describe-label">Readiness</td><td style={{ "font-size": "11px" }}>{c.readiness_probe}</td></tr>
+                                <tr><td class="describe-label">Startup</td><td style={{ "font-size": "11px" }}>{c.startup_probe}</td></tr>
+                                <tr><td class="describe-label">Env Vars</td><td>{c.env_count} variable{c.env_count !== 1 ? "s" : ""}</td></tr>
+                                <tr><td class="describe-label">Mounts</td><td style={{ "font-size": "11px" }}>{c.mounts.length > 0 ? <For each={c.mounts}>{(m) => <div>{m}</div>}</For> : "None"}</td></tr>
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+                      </For>
+
+                      {/* Volumes */}
+                      <h4 class="describe-section-title">Volumes ({pod!.volumes.length})</h4>
+                      <Show when={pod!.volumes.length > 0} fallback={<div class="describe-empty">None</div>}>
+                        <table class="resource-table">
+                          <thead><tr><th>Name</th><th>Type</th><th>Details</th></tr></thead>
+                          <tbody>
+                            <For each={pod!.volumes}>
+                              {(v) => (
+                                <tr>
+                                  <td>{v.name}</td>
+                                  <td><span class="describe-badge">{v.volume_type}</span></td>
+                                  <td style={{ color: "var(--text-secondary)", "font-size": "11px" }}>{v.details || "-"}</td>
+                                </tr>
+                              )}
+                            </For>
+                          </tbody>
+                        </table>
+                      </Show>
+
+                      {/* Tolerations */}
+                      <h4 class="describe-section-title">Tolerations ({pod!.tolerations.length})</h4>
+                      <Show when={pod!.tolerations.length > 0} fallback={<div class="describe-empty">None</div>}>
+                        <div style={{ "font-size": "12px" }}>
+                          <For each={pod!.tolerations}>
+                            {(t) => <div style={{ padding: "2px 0", color: "var(--text-secondary)" }}>{t}</div>}
+                          </For>
+                        </div>
+                      </Show>
+                    </Show>
+                  </div>
+                );
+              })()}
+            </Show>
+            <Show when={!describeLoading() && !describeData()}>
+              <div class="empty-state"><p>Failed to load describe data</p></div>
+            </Show>
           </Show>
 
           <Show when={activeTab() === "events"}>

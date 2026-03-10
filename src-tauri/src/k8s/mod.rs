@@ -1,6 +1,7 @@
 pub mod benchmark;
 pub mod context;
 pub mod cost;
+pub mod describe;
 pub mod crds;
 pub mod cronjob;
 pub mod diff;

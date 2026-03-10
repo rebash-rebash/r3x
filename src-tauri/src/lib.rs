@@ -7,6 +7,7 @@ use tauri::Manager;
 use k8s::benchmark::benchmark_pod;
 use k8s::context::{get_current_context, list_contexts, reconnect, switch_context};
 use k8s::cost::estimate_cost;
+use k8s::describe::describe_resource;
 use k8s::cronjob::{get_cronjob_detail, trigger_cronjob};
 use k8s::diff::{diff_resources, diff_yaml};
 use k8s::health::get_cluster_health;
@@ -241,6 +242,7 @@ pub fn run() {
             get_network_policies,
             get_cluster_health,
             get_cluster_overview,
+            describe_resource,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
