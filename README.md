@@ -20,7 +20,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-blue" alt="Platform" />
   <img src="https://img.shields.io/badge/license-MIT-green" alt="License" />
-  <img src="https://img.shields.io/badge/version-0.2.0-orange" alt="Version" />
+  <img src="https://img.shields.io/badge/version-0.2.1-orange" alt="Version" />
   <img src="https://img.shields.io/badge/rust-stable-brightgreen" alt="Rust" />
 </p>
 
@@ -68,6 +68,7 @@ r3x gives you a real GUI with the resource efficiency of a terminal app. No Elec
 
 ### Inspection
 - **YAML viewer** — View the full YAML spec of any resource
+- **Describe view** — Full `kubectl describe`-style output for pods — conditions, containers, init containers, volumes, tolerations, probes, resource limits, environment variables
 - **Real-time log streaming** — Stream pod logs with container selection and keyword filtering
 - **Log export** — Download logs as text files
 - **Events timeline** — View Kubernetes events for any resource
@@ -76,7 +77,7 @@ r3x gives you a real GUI with the resource efficiency of a terminal app. No Elec
 ### Operations
 - **Scale deployments** — Scale replicas up/down directly from the UI
 - **Rollout restart** — Trigger rolling restarts on Deployments, StatefulSets, DaemonSets
-- **Port forwarding** — Forward local ports to pods/services with active session management
+- **Port forwarding** — Auto-detect container ports, forward with one click, active sessions shown as clickable http/https links
 - **Delete resources** — Remove resources with confirmation
 - **Apply YAML** — Edit and apply resource YAML directly
 - **CronJob triggers** — Manually trigger CronJobs on demand
@@ -126,6 +127,7 @@ r3x gives you a real GUI with the resource efficiency of a terminal app. No Elec
 - **System tray** — Runs in background for instant access; click tray icon to restore
 - **Favorite namespaces** — Pin frequently used namespaces for quick switching
 - **Alerts bell** — Critical alerts indicator with warning count badge
+- **Help panel** — Built-in help & guide with navigation reference, keyboard shortcuts, and feature documentation
 - **Two-row header** — Context, namespace, cluster info on row 1; breadcrumb, filters, search on row 2
 - **Tiny footprint** — ~17MB app bundle, ~30MB RAM at runtime
 
@@ -164,7 +166,7 @@ git clone https://github.com/rebash-rebash/r3x.git
 cd r3x
 npm install
 cargo tauri build
-# Installer at: src-tauri\target\release\bundle\nsis\r3x_0.2.0_x64-setup.exe
+# Installer at: src-tauri\target\release\bundle\nsis\r3x_0.2.1_x64-setup.exe
 ```
 
 ### Linux
@@ -275,6 +277,8 @@ r3x/
 │   │   ├── NetpolPanel.tsx     # Network policy viewer
 │   │   ├── EventsPanel.tsx     # Cluster events log
 │   │   ├── AlertsBell.tsx      # Critical alerts indicator
+│   │   ├── PortForwardPanel.tsx# Port forward management
+│   │   ├── HelpPanel.tsx       # Built-in help & guide
 │   │   └── Terminal.tsx        # xterm.js pod exec
 │   ├── stores/
 │   │   ├── k8s.ts              # Central state (signals + Tauri IPC)
@@ -301,6 +305,7 @@ r3x/
 │           ├── netpol.rs       # Network policy analysis
 │           ├── events.rs       # Kubernetes events
 │           ├── nodes.rs        # Node details, cordon/drain
+│           ├── describe.rs     # kubectl describe output
 │           ├── portforward.rs  # Port forwarding
 │           ├── scale.rs        # Deployment scaling, rollout restart
 │           ├── images.rs       # Image scanning
